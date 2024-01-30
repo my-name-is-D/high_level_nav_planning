@@ -1,13 +1,19 @@
+from __future__ import annotations
+from scipy import special
+from typing import Optional, Union
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import igraph
-import os
+from io import BytesIO
 import copy
 from matplotlib import cm, colors
 import matplotlib.collections as mcoll
 import matplotlib.path as mpath
+import io
+import imageio
+
 
 def onehot(value, num_values):
     arr = np.zeros(num_values)
@@ -67,6 +73,111 @@ def make_segments(x, y):
     segments = np.concatenate([points[:-1], points[1:]], axis=1)
     return segments
 
+
+#==== SAVING PLOTS ====#
+
+def save_transitions_plots(model, model_name, actions, desired_state_mapping, run_logs, cmap,store_path):
+    agent_state_mapping = model.get_agent_state_mapping(run_logs['c_obs'],run_logs['actions'][1:], run_logs['poses'])
+    Transition_matrix = model.get_B()
+    T_plot = plot_transition_detailed_resized(Transition_matrix, actions, agent_state_mapping, desired_state_mapping, plot=False)
+    plt.savefig(store_path / 'model_transitions.jpg')
+    plt.close()
+        
+    if 'ours' in model_name:
+        v = [value['state'] for value in agent_state_mapping.values()]
+        obs = [value['ob'] for value in agent_state_mapping.values()]
+        T = Transition_matrix[v,:][:,v,:]
+        A = T.sum(2).round(1)
+        div = A.sum(1, keepdims=True)
+        A /= (div + 0.0001)
+        e_th = 0.06
+        while e_th < 1.5:
+            edge_threshold = e_th
+            e_th*=1.5
+            A[A < edge_threshold] = 0
+            plot_graph_as_cscg(A, agent_state_mapping, cmap,store_path, edge_threshold= edge_threshold)
+
+    elif 'cscg' in model_name:
+        if len(model.states) == 0:
+            c_obs = np.array(run_logs['c_obs']).flatten().astype(np.int64)
+            a = np.array(run_logs['actions'][1:]).flatten().astype(np.int64)
+            states = model.decode(c_obs,a)[1]
+        else:
+            states = model.states
+        v = np.unique(states)
+        T = model.C[:, v][:, :, v]
+        A = T.sum(0)
+        div = A.sum(1, keepdims=True)
+        A /= (div + 0.0001)
+        plot_cscg_graph(A, run_logs['c_obs'], v, model.n_clones,  store_path, cmap)
+
+def generate_csv_report(run_logs, flags, store_path):
+    if 'frames' in run_logs.keys():
+        del run_logs['frames']
+    
+    if 'train_progression' in run_logs.keys():
+        del run_logs['train_progression']
+
+    # if 'agent_info' in run_logs.keys():
+    #     del run_logs['agent_info']
+
+    # del run_logs['stop_condition_none']
+    max_list_length = max(len(value) for value in run_logs.values() if (isinstance(value, list) or isinstance(value, np.ndarray)))
+
+    for key, value in run_logs.items():
+        if not isinstance(value, list) and not isinstance(value, np.ndarray) :
+            run_logs[key] =  [value] * max_list_length
+         
+        elif len(value) < max_list_length:
+            to_add = [value[-1]] * (max_list_length - len(value))
+            run_logs[key] =  np.append(value, to_add)
+            
+    flags_dict = vars(flags)
+    del flags_dict['start_pose']
+    for key, value in flags_dict.items():
+        run_logs[key] = [value] * max_list_length
+
+    run_logs_df = pd.DataFrame.from_dict(run_logs)
+    run_logs_df.to_excel(store_path / "logs.xlsx", index=False, engine='openpyxl')   
+
+def generate_plot_report(run_logs, env, store_path):
+    ax = plot_path_in_map(env, run_logs['poses'])
+    plt.savefig(store_path /"agent_path.jpg")
+    plt.clf()
+
+    # Trajectory gif
+    gif_path = store_path / "navigate.gif"
+    imageio.mimsave(gif_path, run_logs["frames"], 'GIF', duration=500)
+
+    # Entropy plot
+    state_beliefs = [log["qs"] for log in run_logs["agent_info"]]
+    entropies = [entropy(s) for s in state_beliefs]
+    plt.figure()
+    plt.plot(np.arange(len(entropies)), entropies)
+    plt.title("Entropy over full state belief")
+    plt.xlabel("Time")
+    plt.ylabel("Entropy")
+    plt.grid(True)
+    plt.savefig(store_path /"entropy_plot.jpg")
+    plt.clf()
+
+    # Bayesian Surprise
+    surprises = [np.nan_to_num(log["bayesian_surprise"]) for log in run_logs["agent_info"]]
+    plt.plot(np.arange(len(surprises)), surprises)
+    plt.title("Bayesian Surprise")
+    plt.xlabel("Time")
+    plt.ylabel("Surprise")
+    plt.grid(True)
+    plt.savefig(store_path /"Bayesian_surprise_plot.jpg")
+    plt.clf()
+
+    if 'train_progression' in run_logs:
+        ax = plot_progression_T(run_logs['train_progression'])
+        plt.savefig(store_path /"train_progression.jpg")
+
+    # Close the Matplotlib plot to release memory (optional)
+    plt.close()
+
 #==== AGENT IN ENV PRINT ====#
 def plot_observations_and_states(env, pose, agent_state_map=None):
     visualise_position = env.unknown_rooms.copy().astype(object)
@@ -87,6 +198,23 @@ def plot_observations_and_states(env, pose, agent_state_map=None):
         print(visualise_position)
 
 #==== MAP PLOTS ====#
+    
+def get_frame(env, pose ):
+    
+    ax = plot_map(env.rooms, cmap=env.rooms_colour_map, show = False)
+    ax.text(pose[1], pose[0], str('x'), ha='center', va='center', color='black', fontsize=30)
+    
+    # Save axes to BytesIO buffer
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png')
+    buffer.seek(0)
+
+    # Read image data from BytesIO buffer
+    image = imageio.imread(buffer)
+    # textvar.set_visible(False)
+    ax.clear() 
+    return image
+
 def plot_map(rooms, cmap, show = True):
     fig = plt.figure(1)
     ax = plt.subplot(1,1,1)
@@ -99,7 +227,10 @@ def plot_map(rooms, cmap, show = True):
         for i in range(rooms.shape[0]):
             for j in range(rooms.shape[1]):
                 ax.text(j, i, str(rooms[i, j]), ha='center', va='center', color='black', fontsize=30)    
-        plt.savefig('figures/room_'+str(rooms.shape[0])+'x'+str(rooms.shape[1])+'_'+str(np.max(rooms))+'obs.jpg')
+        try:
+            plt.savefig('figures/room_'+str(rooms.shape[0])+'x'+str(rooms.shape[1])+'_'+str(np.max(rooms))+'obs.jpg')
+        except FileNotFoundError:
+            print('the path to figures is inexistant to save the plot_map')
     return ax
 
 def from_policy_to_pose(env, p, policy, add_rand=False):
@@ -107,13 +238,13 @@ def from_policy_to_pose(env, p, policy, add_rand=False):
     observations = [env.get_ob_given_p(p)]
     start_range = (20, 40)
     end_range = (-40, 20)
-
-    for a_idx in range(len(policy)):
+    length_policy = len(policy)
+    for a_idx in range(length_policy):
         o, p = env.hypo_step(int(policy[a_idx]), p)
 
         if add_rand:
             # Calculate the lerp factor based on the current step
-            lerp_factor = a_idx / (len(policy) - 1)
+            lerp_factor = a_idx / ( length_policy - 1)
             # Use lerp to get values between the start_range and end_range
             pose_noise_x = np.random.uniform(*start_range) + lerp_factor * (np.random.uniform(*end_range) - np.random.uniform(*start_range))
             pose_noise_y = np.random.uniform(*start_range) + lerp_factor * (np.random.uniform(*end_range) - np.random.uniform(*start_range))
@@ -129,22 +260,43 @@ def from_policy_to_pose(env, p, policy, add_rand=False):
 
     return agent_poses, observations
 
-def plot_path_in_map(env, start_pose, policy, cmap):
-    agent_poses, obs = from_policy_to_pose(env, start_pose, policy, add_rand=True)
-    ax = plot_map(env.rooms, cmap, show=False)
+def add_random_to_pose(poses):
+    start_range = (10, 40)
+    end_range = (-40, -10)
+    n_poses = len(poses)
+    agent_poses = []
+    for idx, pose in enumerate(poses):
+        lerp_factor = idx / (n_poses - 1)
+        # Use lerp to get values between the start_range and end_range
+        pose_noise_x = np.random.uniform(*start_range) + lerp_factor * (np.random.uniform(*end_range) - np.random.uniform(*start_range))
+        pose_noise_y = np.random.uniform(*start_range) + lerp_factor * (np.random.uniform(*end_range) - np.random.uniform(*start_range))
+        pose_wt_noise = [pose[0] + pose_noise_x / 100, pose[1] + pose_noise_y / 100]
+        agent_poses.append(pose_wt_noise)
+    return agent_poses
+
+
+def plot_path_in_map(env, pose, policy=None):
+    if policy is None:
+        agent_poses = add_random_to_pose(pose)
+    else:
+        agent_poses, obs = from_policy_to_pose(env, pose, policy, add_rand=True)
+    ax = plot_map(env.rooms, env.rooms_colour_map, show=False)
     agent_poses = np.vstack(agent_poses)
     path = mpath.Path(np.column_stack([agent_poses[:,1], agent_poses[:,0]]))
     verts = path.interpolated(steps=3).vertices
     x, y = verts[:, 0], verts[:, 1]
     z = np.linspace(0, 1, len(x))
     colorline(x, y, z, cmap=plt.get_cmap('cividis'), linewidth=2, ax=ax)
-    plot_name = 'figures/room_'+str(env.rooms.shape[0])+'x'+str(env.rooms.shape[1])+'_'+str(np.max(env.rooms))+'obs_0'
-    count = 0
-    while os.path.exists(plot_name+'.jpg'):
-        count+=1
-        plot_name = plot_name.replace('obs_'+str(count-1), 'obs_'+str(count))
-    plt.savefig(plot_name +'.jpg')
-
+    # plot_name = 'figures/'+ model_name + '/room_'+str(env.rooms.shape[0])+'x'+str(env.rooms.shape[1])+'_'+str(np.max(env.rooms))+'obs_0'
+    # count = 0
+    # while os.path.exists(plot_name+'.jpg'):
+    #     count+=1
+    #     plot_name = plot_name.replace('obs_'+str(count-1), 'obs_'+str(count))
+    #try:
+    #     plt.savefig(plot_name +'.jpg')
+    # except FileNotFoundError:
+    #     print('the path to figures is inexistant to save the plot_path_in_map')
+    return ax
 #==== GRAPH PLOT OURS ====#
 def plot_graph(env, A, B, cmap=cm.Spectral, output_file= 'test.pdf', test=True):
     # print('agent.M',agent.M, agent.M.shape)
@@ -187,14 +339,10 @@ def plot_graph(env, A, B, cmap=cm.Spectral, output_file= 'test.pdf', test=True):
     
     return out
 
-def plot_graph_as_cscg(B, agent_state_mapping, cmap=cm.Spectral, specific_str='', edge_threshold= 1):
+def plot_graph_as_cscg(A, agent_state_mapping, cmap,store_path, edge_threshold= 1):
+    
     v = [value['state'] for value in agent_state_mapping.values()]
     obs = [value['ob'] for value in agent_state_mapping.values()]
-    Transition_matrix = B[0] 
-    T = Transition_matrix[v,:][:,v,:]
-    A = T.sum(2).round(1)
-    A /= A.sum(1, keepdims=True)
-    A[A < edge_threshold] = 0
     #print(pd.DataFrame(A, index=list(range(0,A.shape[0])), columns=list(range(0,A.shape[0])), dtype=float))
 
     g = igraph.Graph.Adjacency((A > 0).tolist())
@@ -203,15 +351,15 @@ def plot_graph_as_cscg(B, agent_state_mapping, cmap=cm.Spectral, specific_str=''
     # edge_widths = [x if x>=edge_threshold else 0 for x in edge_widths]
     # print(edge_widths)
     colors = [cmap(nl)[:3] for nl in obs]
-    plot_name = 'figures/'+ specific_str + 'graph_0'
-    count = 0
-    while os.path.exists(plot_name+'.png'):
-        count+=1
-        plot_name = plot_name.replace('graph_'+str(count-1), 'graph_'+str(count))
-
+    # plot_name = 'figures/'+ specific_str + 'graph_0'
+    # count = 0
+    # while os.path.exists(plot_name+'.png'):
+    #     count+=1
+    #     plot_name = plot_name.replace('graph_'+str(count-1), 'graph_'+str(count))
+    file = 'connection_graph_edge_Th_'+str(edge_threshold)+'.png'
     out = igraph.plot(
         g,
-        plot_name+'.png',
+        store_path / file,
         layout=g.layout("kamada_kawai"),
         vertex_color=colors,
         vertex_label=v,
@@ -223,33 +371,27 @@ def plot_graph_as_cscg(B, agent_state_mapping, cmap=cm.Spectral, specific_str=''
 
 #==== GRAPH PLOT CSCG ====#
 def plot_cscg_graph(
-    chmm, x, a, specific_str, cmap=cm.Spectral, multiple_episodes=False, vertex_size=30
+    A, x, v, n_clones,  store_path, cmap=cm.Spectral, vertex_size=30
 ):
-    states = chmm.decode(x, a)[1]
-
-    v = np.unique(states)
-    if multiple_episodes:
-        T = chmm.C[:, v][:, :, v][:-1, 1:, 1:]
-        v = v[1:]
-    else:
-        T = chmm.C[:, v][:, :, v]
-    A = T.sum(0)
-    A /= A.sum(1, keepdims=True)
 
     g = igraph.Graph.Adjacency((A > 0).tolist())
-    node_labels = np.arange(x.max() + 1).repeat(chmm.n_clones)[v]
-    if multiple_episodes:
-        node_labels -= 1
+    try:
+        node_labels = np.arange(np.max(x) + 1).repeat(n_clones)[v]
+    except ValueError:
+        print('Value error in plot_cscg_graph')
+        node_labels = np.arange(A.shape[0]).repeat(n_clones)[v]
+        
+        
     colors = [cmap(nl)[:3] for nl in node_labels / node_labels.max()]
-    plot_name = 'figures/'+ specific_str + 'graph_0'
-    count = 0
-    while os.path.exists(plot_name+'.png'):
-        count+=1
-        plot_name = plot_name.replace('graph_'+str(count-1), 'graph_'+str(count))
+    # plot_name = 'figures/'+ specific_str + 'graph_0'
+    # count = 0
+    # while os.path.exists(plot_name+'.png'):
+    #     count+=1
+    #     plot_name = plot_name.replace('graph_'+str(count-1), 'graph_'+str(count))
 
     out = igraph.plot(
         g,
-        plot_name+'.png',
+        store_path / 'connection_graph.png',
         layout=g.layout("kamada_kawai"),
         vertex_color=colors,
         vertex_label=v,
@@ -367,14 +509,18 @@ def plot_transition_detailed(B, actions, state_map, desired_state_mapping, model
     if plot:
         plt.show()
     if save:
-        plot_name = 'figures/'+ model_name + '_Transition_full_matrix_0'
+        plot_name = 'figures/'+ model_name +'/'+ model_name + '_Transition_full_matrix_0'
         count = 0
         while os.path.exists(plot_name+'.jpg'):
             count+=1
             plot_name = plot_name.replace('matrix_'+str(count-1), 'matrix_'+str(count))
         plt.savefig(plot_name +'.jpg')
+
+
+
+def plot_transition_detailed_resized(B, actions, state_map, desired_state_mapping, plot=True):
     
-def plot_transition_detailed_resized(B, actions, n_states, state_map, desired_state_mapping, model_name, plot=True, save=False):
+    n_states = len(desired_state_mapping)
     
     # pose = next(key for key, value in state_map.items() if value['state'] == i)
     labels = [(key, value['state']) for key, value in state_map.items() ]
@@ -391,10 +537,10 @@ def plot_transition_detailed_resized(B, actions, n_states, state_map, desired_st
                 break 
 
             action_str = next(key for key, value in actions.items() if value == count)
-            if 'cscg' in model_name:
-                temp_b = cscg_T_B_to_ideal_T_B(B, count, desired_state_mapping, state_map)
-            else:
-                temp_b = T_B_to_ideal_T_B(B, count, desired_state_mapping, state_map)
+            # if 'cscg' in model_name:
+            #     temp_b = cscg_T_B_to_ideal_T_B(B, count, desired_state_mapping, state_map)
+            # else:
+            temp_b = T_B_to_ideal_T_B(B, count, desired_state_mapping, state_map)
             
             temp_b = temp_b[:n_states,:n_states]
 
@@ -411,24 +557,29 @@ def plot_transition_detailed_resized(B, actions, n_states, state_map, desired_st
     plt.tight_layout()
     if plot:
         plt.show()
-    if save:
-        plot_name = 'figures/'+ model_name + '_Transition_matrix_0'
-        count = 0
-        while os.path.exists(plot_name+'.jpg'):
-            count+=1
-            plot_name = plot_name.replace('matrix_'+str(count-1), 'matrix_'+str(count))
-        plt.savefig(plot_name +'.jpg')
+    # if save:
+    #     plot_name = 'figures/'+ model_name + '/'+ model_name +'_Transition_matrix_0'
+    #     count = 0
+    #     while os.path.exists(plot_name+'.jpg'):
+    #         count+=1
+    #         plot_name = plot_name.replace('matrix_'+str(count-1), 'matrix_'+str(count))
+    #     plt.savefig(plot_name +'.jpg')
+    return plt
 
-def print_transitions(B, actions):
+def print_transitions(B, actions, show=True):
+    B_actions = {}
     for key, value in actions.items():
-        print('         ',key)
-        print('    prev_s   ')
         try:
             a_T = B[0][:,:,value].round(3)
         except IndexError:
             a_T = B[:,:,value].round(3)
-        
-        print(pd.DataFrame(a_T, index=list(range(0,a_T.shape[0])), columns=list(range(0,a_T.shape[0])), dtype=float))
+        B_a = pd.DataFrame(a_T, index=list(range(0,a_T.shape[0])), columns=list(range(0,a_T.shape[1])), dtype=float)
+        B_actions[key] = B_a
+        if show:
+            print('         ',key)
+            print('    prev_s   ')
+            print(B_a)
+    return B_actions
 
 #==== OURS: From B to ideal B for visualisation ===#
 def T_B_to_ideal_T_B(B, action, desired_state_mapping,agent_state_mapping):
@@ -461,8 +612,9 @@ def T_B_to_ideal_T_B(B, action, desired_state_mapping,agent_state_mapping):
 def B_to_ideal_B(B,actions, desired_state_mapping, agent_state_mapping=None):
     """ rearrange the full B matrix"""
     reshaped_B = np.array([])
+    actions = dict(sorted(actions.items(), key=lambda item: item[1]))
     for a in actions.values():
-        B_a = T_B_to_ideal_T_B(B[0], a, desired_state_mapping, agent_state_mapping)
+        B_a = T_B_to_ideal_T_B(B, a, desired_state_mapping, agent_state_mapping)
         B_a = B_a.reshape(B_a.shape[0], B_a.shape[1], 1)
         if reshaped_B.shape[0] == 0:
             reshaped_B = B_a
@@ -552,6 +704,13 @@ def place_field(mess_fwd, rc, clone):
 
 
 
+def plot_progression_T(progression):
+    fig, ax = plt.subplots(1, 1)
+    ax.set_title('Train progression')
+    # ax.set_xlabel('Train progression')
+    ax.plot(progression, color="tab:red")
+    ax.grid(True)
+    return ax
 
 
 
@@ -562,7 +721,78 @@ def place_field(mess_fwd, rc, clone):
 
 
 
+def entropy(pk: np.typing.ArrayLike,
+            qk: Optional[np.typing.ArrayLike] = None,
+            base: Optional[float] = None,
+            axis: int = 0
+            ) -> Union[np.number, np.ndarray]:
+    """Calculate the entropy of a distribution for given probability values.
 
+    If only probabilities `pk` are given, the entropy is calculated as
+    ``S = -sum(pk * log(pk), axis=axis)``.
+
+    If `qk` is not None, then compute the Kullback-Leibler divergence
+    ``S = sum(pk * log(pk / qk), axis=axis)``.
+
+    This routine will normalize `pk` and `qk` if they don't sum to 1.
+
+    Parameters
+    ----------
+    pk : array_like
+        Defines the (discrete) distribution. Along each axis-slice of ``pk``,
+        element ``i`` is the  (possibly unnormalized) probability of event
+        ``i``.
+    qk : array_like, optional
+        Sequence against which the relative entropy is computed. Should be in
+        the same format as `pk`.
+    base : float, optional
+        The logarithmic base to use, defaults to ``e`` (natural logarithm).
+    axis: int, optional
+        The axis along which the entropy is calculated. Default is 0.
+
+    Returns
+    -------
+    S : {float, array_like}
+        The calculated entropy.
+
+    Examples
+    --------
+
+    >>> from scipy.stats import entropy
+
+    Bernoulli trial with different p.
+    The outcome of a fair coin is the most uncertain:
+
+    >>> entropy([1/2, 1/2], base=2)
+    1.0
+
+    The outcome of a biased coin is less uncertain:
+
+    >>> entropy([9/10, 1/10], base=2)
+    0.46899559358928117
+
+    Relative entropy:
+
+    >>> entropy([1/2, 1/2], qk=[9/10, 1/10])
+    0.5108256237659907
+
+    """
+    if base is not None and base <= 0:
+        raise ValueError("`base` must be a positive number or `None`.")
+
+    pk = np.asarray(pk)
+    pk = 1.0*pk / np.sum(pk, axis=axis, keepdims=True)
+    if qk is None:
+        vec = special.entr(pk)
+    else:
+        qk = np.asarray(qk)
+        pk, qk = np.broadcast_arrays(pk, qk)
+        qk = 1.0*qk / np.sum(qk, axis=axis, keepdims=True)
+        vec = special.rel_entr(pk, qk)
+    S = np.sum(vec, axis=axis)
+    if base is not None:
+        S /= np.log(base)
+    return S
 
 
 

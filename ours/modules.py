@@ -251,30 +251,33 @@ def create_B_matrix(num_states:int, num_actions:int)->np.ndarray:
     B /= num_states
     return B
 
-def create_A_matrix(num_ob:int, num_states:int, dim:int=1)->np.ndarray:
+def create_A_matrix(num_ob:list, num_states:list, dim:int=1)->np.ndarray:
     """ 
     generate in one Emission matrix A all the observation/states relationship
     each P(o|s) are of shape 
     [num_ob, n_states] with normalised content
     dim: the number of observations we will feed A with.
     """
-    A = utils.obj_array_ones([[num_ob] + [num_states] for d in range(dim)])
+    A = utils.obj_array_ones([[num_ob[d]] + [num_states[d]] for d in range(dim)])
     A = A/ num_ob
     return A
 
-def update_B_matrix_size(B:np.ndarray, add:int=1)->np.ndarray:
-    ''' increase the square matrix B by the value add,
+def update_B_matrix_size(B:np.ndarray, add:int=1, alter_weights:bool = True)->np.ndarray:
+    ''' TODO: Improve this logic... not great. especially for pB
+    increase the square matrix B by the value add,
     feed the content of original matrix B in the newly generated one
     all normalised values are re-normalised given new shape.
+    alter_weights: If we want the new probabilities to be less probable than already defined states.
     '''
     B_mean_value = 1/B[0].shape[0]
     num_states = B[0].shape[0] + add
     new_B = create_B_matrix(num_states, B[0].shape[-1])
-    new_B -= 0.9/num_states
+    #new_B -= 0.9/num_states
     
     slices = tuple([slice(dim) for dim in B[0].shape])
     new_B[slices] = B[0]
-    new_B[new_B == B_mean_value] = 1/num_states - 0.9/num_states 
+    if alter_weights:
+        new_B[new_B == B_mean_value] = 1/num_states - 0.9/num_states 
     #If there are values that have not been explored yet, 
     # their initial values is diminuished according to number of 
     # the number of states (thus not high proba when never tried)
@@ -282,7 +285,7 @@ def update_B_matrix_size(B:np.ndarray, add:int=1)->np.ndarray:
     B[0] = new_B
     return B
 
-def update_A_matrix_size(A:np.ndarray, add_ob:int=0, add_state:int=0, null_proba:bool = True)->np.ndarray:
+def update_A_matrix_size(A, add_ob=0, add_state=0, null_proba = True):
     ''' increase the square matrix A by the values adds,
     add_ob: row add
     add_state: col add
@@ -291,7 +294,7 @@ def update_A_matrix_size(A:np.ndarray, add_ob:int=0, add_state:int=0, null_proba
     num_ob = A.shape[0] + add_ob
     num_states = A.shape[1] + add_state
     
-    new_A = create_A_matrix(num_ob, num_states, 1)[0]
+    new_A = create_A_matrix([num_ob], [num_states], 1)[0]
     if null_proba:
         new_A[:] = 0
     else:

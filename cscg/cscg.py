@@ -4,7 +4,12 @@ import numpy as np
 import numba as nb
 from tqdm import trange
 import sys
+import copy
+from ours.pymdp.agent import Agent
+from ours.pymdp import utils
+from ours.pymdp.maths import spm_dot
 
+import pandas as pd
 
 def validate_seq(x, a, n_clones=None):
     """Validate an input sequence of observations x and actions a"""
@@ -105,7 +110,7 @@ def datagen_structured_obs_room(
 
 
 class CHMM(object):
-    def __init__(self, n_clones, x, a, pseudocount=0.0, dtype=np.float32, seed=42):
+    def __init__(self, n_clones, x, a, pseudocount=0.0, dtype=np.float32, seed=42, set_stationary_B=True):
         """Construct a CHMM objct. n_clones is an array where n_clones[i] is the
         number of clones assigned to observation i. x and a are the observation sequences
         and action sequences, respectively."""
@@ -113,47 +118,252 @@ class CHMM(object):
         self.n_clones = n_clones
         validate_seq(x, a, self.n_clones)
         assert pseudocount >= 0.0, "The pseudocount should be positive"
-        print("Average number of clones:", n_clones.mean())
+        #print("Average number of clones:", n_clones.mean())
         self.pseudocount = pseudocount
         self.dtype = dtype
         n_states = self.n_clones.sum()
-        n_actions = a.max() + 1
-        self.C = np.random.rand(n_actions, n_states, n_states).astype(dtype)
+        self.n_actions = a.max() + 1
+        self.C = np.random.rand(self.n_actions, n_states, n_states).astype(dtype)
         self.Pi_x = np.ones(n_states) / n_states
-        self.Pi_a = np.ones(n_actions) / n_actions
+        self.Pi_a = np.ones(self.n_actions) / self.n_actions
         self.update_T()
         self.agent_state_mapping = {}
         self.states = []
+        self.set_stationary_B = set_stationary_B
+        A, B = self.extract_AB(reduce=False, do_add_stationary= False, do_add_death=False)
+        
+        self.agent = Agent(
+            A=A, B=B, action_selection="stochastic", policy_len=1
+        )
+        self.prev_action = None
+        self.preferred_states = []
+        self.preferred_ob = [-1]
 
-    def infer_action(self, next_possible_actions = None):
-        return np.random.choice(next_possible_actions)
+    def get_current_belief(self):
+        return self.agent.qs
+    
+    def infer_action(self, **kwargs):
+        obs=kwargs.get('observation',-1)
+        next_possible_actions = kwargs.get('next_possible_actions',[*range(self.n_actions)])
+        random = kwargs.get('random_policy', False)
+        if random:
+            return np.random.choice(next_possible_actions), {
+                "qs": self.agent.qs[0],
+                "bayesian_surprise": 0,
+                }
+        
+        prior = self.agent.qs[0].copy()
+        if self.prev_action is not None:
+            prior = spm_dot(self.agent.B[0][:, :, self.prev_action], prior)
+
+        qs = self.agent.infer_states([obs])
+
+        action = int(self.get_action(qs,next_possible_actions))
+
+        self.prev_action = action
+
+        self.agent.action = np.array([self.prev_action])
+        self.agent.step_time()
+
+        posterior = self.agent.qs[0].copy()
+        return action, {
+            "qs": self.agent.qs[0],
+            "bayesian_surprise": utils.bayesian_surprise(posterior, prior),
+            }
+    
+    def get_action(self, qs,next_possible_actions):
+        # states = np.where(qs[0][:-1] > 1e-4)[0]
+        states = np.where(qs[0] > 1e-4)[0]
+        pq = qs[0][states]
+
+        plans = []
+        n_states = []
+        for i, s in enumerate(states):
+            # pi_x = np.zeros_like(qs[0][:-1])
+            pi_x = np.zeros_like(qs[0])
+            pi_x[s] = 1
+            #if s not in chmm.preferred_states:
+            if s in self.states:
+                actions, states = self.observation_bridge(pi_x, max_steps=15) #consider preference
+            
+                if actions[0] == -1:
+                    pq[i] = 0
+                elif states[0] in self.states:
+                    pq[i] = pq[i] * 1.5
+            else:
+                actions = [-1]  # just go forward if its already in preferred
+                states = [-1]
+                pq[i] = 0
+
+            plans.append(actions[0])
+            n_states.append(states[0])
+
+        norm = pq.sum() 
+        if norm <= 0:
+            pq = [1/len(pq)]*len(pq)
+            action = np.random.choice(next_possible_actions)
+        else:
+            pq /= norm
+            action = np.random.choice(plans, p=pq)
+        return action
     
     def get_agent_state_mapping(self, x,a, agent_pose):
         self.define_agent_state_mapping(x,a, agent_pose)
         return self.agent_state_mapping
     
-    def get_B(self):
-        return self.T
+    def get_B(self, set_stationary_B=None):
+        B = copy.deepcopy(self.T)
+        rearranged_B = np.transpose(B,(2,1,0))
+        if set_stationary_B == True or (set_stationary_B is None and self.set_stationary_B == True):
+            rearranged_B = set_stationary(rearranged_B)
+        
+        return rearranged_B
+    
+    def get_A(self,reduce=True, do_add_death=False):
+        death = int(do_add_death)
+        n_obs = len(self.n_clones)
+
+        T = self.get_B()
+        unreduced_n_states = T.shape[0]
+        # for a in range(T.shape[2]):
+        #     print('T',a,pd.DataFrame(T[:,:,a], index=list(range(0,T.shape[0])), columns=list(range(0,T.shape[1])), dtype=float))
+        if reduce:
+            v = T.sum(axis=2).sum(axis=1).nonzero()[0]
+
+        # A matrix = likelihood matrix, unreduced matrix and uniform probabilities
+        state_loc = np.hstack(
+            (np.array([0], dtype=self.n_clones.dtype), self.n_clones)
+        ).cumsum()
+
+        A = np.zeros((n_obs, unreduced_n_states + death))
+        for i in range(n_obs - int(death)):
+            s, f = state_loc[i : i + 2]
+            A[i, s:f] = 1.0
+      
+        # Direct mapping of state to a death observation
+        if do_add_death:
+            A[-1, -1] = 1.0
+      
+        if reduce and do_add_death:
+            v = np.concatenate([v, np.array([-1])])
+
+        # Only consider the reduced states
+        if reduce:
+            A = A[:, v]
+
+        # Normalize over state: Sum_s P(o|s) = 1
+        A /= A.sum(axis=0, keepdims=True)
+        return [A]
+
+    def extract_AB(self, reduce=False, do_add_stationary=False, do_add_death=True):
+        """ death --> walls?"""
+        death = int(do_add_death)
+        
+        T = self.get_B()
+        
+        if reduce:
+            v = T.sum(axis=2).sum(axis=1).nonzero()[0]
+            T = T[v, :][:, v]
+
+        # Transition matrix
+        B = np.zeros((T.shape[0] + death, T.shape[0] + death, T.shape[2]))
+        B[: T.shape[0], : T.shape[1]] = T
+        if do_add_death:
+            B = add_death(B)
+        if do_add_stationary:
+            B = add_stationary(B)
+        # Normalize this dude
+        B /= B.sum(axis=0, keepdims=True)
+
+        A = self.get_A(reduce, do_add_death)[0]
+       
+        return A, B
 
     def get_n_states(self):
+        
         return len(self.states)
 
     def define_agent_state_mapping(self, x, a, agent_poses):
+        x = np.array(x).flatten().astype(int)
+        a = np.array(a).flatten().astype(int)
         states = self.decode(x, a)[1]
-        v = np.unique(states)
+     
         values = []
-        for p_idx in range(len(agent_poses)-2, 0, -1):
+        for p_idx in range(len(agent_poses)-1, 0, -1):
             pose = tuple(agent_poses[p_idx])
             state = states[p_idx] 
             if state not in values or pose not in self.agent_state_mapping.keys() :
                 self.agent_state_mapping[pose] = {'state': state, 'ob': int(x[p_idx])}
                 values.append(state)
-        return
+        return 
 
     def agent_step_update(self,action,obs,next_possible_actions):
         """ Do nothing, wait for full motion?"""
         return
+    
+    def goal_oriented_navigation(self, obs):
+        self.update_preference([obs[0]]) # we only want colours as ob
+    
+    def explo_oriented_navigation(self):
+        self.update_preference()
+
+    def update_preference(self, obs:list=None):
+        """given a list of observations we fill C with thos as preference. 
+        If we have a partial preference over several observations, 
+        then the given observation should be an integer < 0, the preference will be a null array 
+        """
+        if isinstance(obs, list):
+            C = self.agent._construct_C_prior()
+            A = self.get_A(reduce=False)[0]
+            preferred_ob = []
+            for modality, ob in enumerate(obs):
+                if ob >= 0:
+                    self.preferred_ob = [ob]
+                    self.preferred_states += list(A[ob, :].nonzero()[0])
+                    ob_processed = utils.process_observation(ob, 1, [self.agent.num_obs[modality]])
+                    ob = utils.to_obj_array(ob_processed)
+                else:
+                    ob = utils.obj_array_zeros([self.agent.num_obs[modality]])
+                preferred_ob.append(ob[0])
+                
+            C = np.array(preferred_ob, dtype=object)
+
+            if not isinstance(C, np.ndarray):
+                raise TypeError(
+                    'C vector must be a numpy array'
+                )
+            self.agent.C = utils.to_obj_array(C)
+
+            assert len(self.agent.C) == self.agent.num_modalities, f"Check C vector: number of sub-arrays must be equal to number of observation modalities: {agent.num_modalities}"
+
+            for modality, c_m in enumerate(self.agent.C):
+                assert c_m.shape[0] == self.agent.num_obs[modality], f"Check C vector: number of rows of C vector for modality {modality} should be equal to {agent.num_obs[modality]}"
+            
+        else:
+            self.agent.C = self.agent._construct_C_prior()
+            self.preferred_states = []
+            self.preferred_ob = [-1]
+
+    def observation_bridge(self, belief_over_states, max_steps=100):
         
+        ret = forward_mp_all_multiple_states(
+            self.T.transpose(0, 2, 1),
+            belief_over_states,
+            self.Pi_a,
+            self.n_clones,
+            self.preferred_states,
+            max_steps,
+        )
+        #print('belief_over_states',np.argmax(belief_over_states), 'mess_fwd, pref state' ,ret[1:] )
+        if ret:
+            log2_lik, mess_fwd, selected_state = ret
+            s_a = backtrace_all(
+                self.T, self.Pi_a, self.n_clones, mess_fwd, selected_state
+            )
+        else:
+            return [-1], [-1]
+        return s_a
+
     def update_T(self):
         """Update the transition matrix given the accumulated counts matrix."""
         self.T = self.C + self.pseudocount
@@ -161,6 +371,7 @@ class CHMM(object):
         norm[norm == 0] = 1
         self.T /= norm
 
+        
     # def update_T(self):
     #     self.T = self.C + self.pseudocount
     #     norm = self.T.sum(2, keepdims=True)  # old model (conditional on actions)
@@ -228,7 +439,8 @@ class CHMM(object):
         return -log2_lik, states
 
     def learn_em_T(self, x, a, n_iter=100, term_early=True):
-        """Run EM training, keeping E deterministic and fixed, learning T"""
+        """Run EM traself.update_T()ining, keeping E deterministic and fixed, learning T"""
+        
         sys.stdout.flush()
         convergence = []
         pbar = trange(n_iter, position=0)
@@ -291,6 +503,8 @@ class CHMM(object):
         
         states = self.decode(x, a)[1]
         self.states = np.unique(states)
+        if self.set_stationary_B:
+            self.T = set_T_stationary(self.T)
         return convergence
 
     def learn_em_E(self, x, a, n_iter=100, pseudocount_extra=1e-20):
@@ -742,3 +956,69 @@ def backtrace_all(T, Pi_a, n_clones, mess_fwd, target_state):
         a_s = rargmax(belief.flatten())
         actions[t], states[t] = a_s // n_states, a_s % n_states
     return actions, states
+
+
+
+def add_death(mat, eps=1e-15):
+    # Given an illigal non-stay action, there is eps chance to die
+    for action in range(mat.shape[-1]):
+        zer = np.where(mat[..., action].sum(axis=0) == 0)[0]
+        mat[-1, zer, action] = eps
+    # Stay dead once reached
+    mat[-1, -1, :] = 1.0
+    return mat
+
+
+def add_stationary(mat, eps=1e-15):
+    """
+    Add an action to stand still
+    """
+    return np.concatenate(
+        [mat, np.eye(mat.shape[0]).reshape(*mat[..., :1].shape)], axis=2
+    )
+
+def set_stationary(mat, idx=-1):
+    mat[:,:,idx] = np.eye(mat.shape[0])
+    return mat
+def set_T_stationary(mat, idx=-1):
+    mat[idx,:,:] = np.eye(mat.shape[-1])
+    return mat
+
+
+def forward_mp_all_multiple_states(
+    T_tr, Pi_x, Pi_a, n_clones, target_states, max_steps
+):
+    """Log-probability of a sequence, and optionally, messages"""
+    # forward pass
+    t, log2_lik = 0, []
+    message = Pi_x
+    p_obs = message.max()
+    assert p_obs > 0
+    message /= p_obs
+    log2_lik.append(np.log2(p_obs))
+    mess_fwd = []
+    mess_fwd.append(message)
+    T_tr_maxa = (T_tr * Pi_a.reshape(-1, 1, 1)).max(0)
+    selected_state = -1
+    for t in range(1, max_steps):
+        message = (T_tr_maxa * message.reshape(1, -1)).max(1)
+        p_obs = message.max()
+        if p_obs > 0:
+            message /= p_obs
+            log2_lik.append(np.log2(p_obs))
+            mess_fwd.append(message)
+
+            break_out = False
+            for target_state in target_states:
+                if message[target_state] > 0.2 and np.any(message != [message[0]]*len(message)):
+                    selected_state = target_state
+                    break_out = True
+                    break
+            if break_out:
+                break
+        else:
+            return False
+
+    else:
+        return False
+    return np.array(log2_lik), np.array(mess_fwd), selected_state

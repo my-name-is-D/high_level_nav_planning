@@ -16,6 +16,11 @@ import itertools
 
 EPS_VAL = 1e-16 # global constant for use in norm_dist()
 
+def bayesian_surprise(posterior, prior):
+    #Added by D
+    return (posterior * np.log(posterior / prior)).sum()
+
+
 def sample(probabilities):
     probabilities = probabilities.squeeze() if len(probabilities) > 1 else probabilities
     sample_onehot = np.random.multinomial(1, probabilities)

@@ -43,13 +43,15 @@ def update_obs_likelihood_dirichlet(pA, A, obs, qs, lr=1.0, modalities="all"):
     num_observations = [pA[modality].shape[0] for modality in range(num_modalities)]
 
     obs_processed = utils.process_observation(obs, num_modalities, num_observations)
+    
     obs = utils.to_obj_array(obs_processed)
 
     if modalities == "all":
         modalities = list(range(num_modalities))
 
     qA = copy.deepcopy(pA)
-        
+    # print('update_obs_likelihood_dirichlet: obs_processed:', obs_processed)
+    # print('qA', qA)
     for modality in modalities:
         dfda = maths.spm_cross(obs[modality], qs)
         dfda = dfda * (A[modality] > 0).astype("float")

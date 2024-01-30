@@ -1,14 +1,14 @@
 import numpy as np
+from visualisation_tools import create_custom_cmap
 
 class GridWorldEnv():
     
-    def __init__(self, rooms:np.ndarray, actions:dict):
+    def __init__(self, room_choice:str, actions:dict):
         self.state_mapping = {}
-        self.rooms = rooms
-        actions = {'LEFT':0,'RIGHT':1, 'UP':2, 'DOWN':3, 'STAY':4}
+        self.rooms, self.rooms_colour_map = setup_grid(room_choice)
         self.possible_actions = {k.upper(): v for k, v in actions.items()}
 
-        self.unknown_rooms = np.ones_like(rooms) -2
+        self.unknown_rooms = np.ones_like(self.rooms) -2
     
     def step(self,a, prev_p):
         #self.state = np.dot(self.B[:,:,a], self.state)
@@ -53,7 +53,7 @@ class GridWorldEnv():
             self.unknown_rooms[self.rooms == real_ob] = new_ob
         
     def get_ob_given_p(self,pose):
-        return self.unknown_rooms[pose[0], pose[1]]
+        return self.rooms[pose[0], pose[1]]
         
     def get_state(self,pose):
         ''' get state given pose'''
@@ -75,7 +75,7 @@ class GridWorldEnv():
 
         return (row,col)
 
-    def get_next_possible_motions(self, position:tuple)->list:
+    def get_next_possible_motions(self, position:tuple, no_stay=False)->list:
         row, col = position
         step_possible_actions = []
         for action_key, action in self.possible_actions.items():
@@ -86,5 +86,128 @@ class GridWorldEnv():
             (action_key == "UP" and row > 0) or
             (action_key == "DOWN" and row < self.rooms.shape[0] - 1)):
                 step_possible_actions.append(action)
-            
+        if no_stay and 'STAY' in self.possible_actions.keys():
+            step_possible_actions.remove(self.possible_actions['STAY'])
         return step_possible_actions
+    
+    def get_possible_motions(self):
+        step_possible_actions = []
+        for action_key, action in self.possible_actions.items():
+            if action_key != 'STAY':
+                step_possible_actions.append(action)
+        return step_possible_actions
+    
+    def define_perfect_B(self):
+        """ The perfect B is defined as B[next_state, prev_state, action]"""
+        #perfect B for this room config
+        desired_state_mapping = {(i * self.rooms.shape[1] + j): (i, j) for i in range(self.rooms.shape[0]) for j in range(self.rooms.shape[1])}
+        P = {}
+        dim = self.rooms.shape
+        for state_index, xy_coordinates in desired_state_mapping.items():
+            P[state_index] = {a : [] for a in range(len(self.possible_actions))}
+            for action in self.possible_actions.values():
+                pose = self.next_p_given_a_known_env(xy_coordinates, action)
+                #print('action', action, 'state coordinates', state_index, xy_coordinates, 'next pose', pose)
+                next_state_idx = next(key for key, value in desired_state_mapping.items() if value == pose)
+                P[state_index][action] = next_state_idx
+
+
+        num_states = len(desired_state_mapping)
+        B = np.zeros([num_states, num_states, len(self.possible_actions)])
+        # print(B.shape)
+        for s in range(num_states):
+            # print('s', s, perfect_state_mapping[s])
+            for a in range(len(self.possible_actions)):
+                ns = int(P[s][a])
+                # print('ps', s, 'a', a, 'ns',ns)
+                B[ns, s, a] = 1
+        return B, desired_state_mapping
+    
+    
+
+    
+    
+def setup_grid(room_choice:str = 'grid_3x3'):
+    
+    room_choice = room_choice.lower()
+    if room_choice == 'grid_3x3_alias': #3x3 rooms, 1 ob per room - WT ALIAS
+        rooms = np.array(
+            [
+                [0, 0, 1],
+                [2, 0, 4],
+                [3, 3, 3],
+            ]
+        )
+    
+    elif  room_choice == "grid_3x3": #3x3 rooms, 1 ob per room - NO ALIAS
+
+        rooms = np.array(
+            [
+                [0, 1, 2],
+                [5, 4, 3],
+                [6, 7, 8],
+            ]
+        ) 
+
+    elif  room_choice == "grid_3x4_alias": #3x4 rooms, 1 ob per room - WT ALIAS
+
+        rooms = np.array(
+            [
+                [0, 0, 1, 4],
+                [2, 0, 1, 3],
+                [3, 3, 3, 0],
+            ]
+        ) #3x4 rooms, 1 ob per room
+    
+    elif  room_choice == "grid_4x4_alias": #4x4 rooms, 1 ob per room - WT ALIAS
+
+        rooms = np.array(
+            [
+                [0, 0, 1, 4],
+                [2, 1, 1, 3],
+                [3, 5, 3, 0],
+                [1, 0, 4, 0],
+            ]
+        ) #4x4 rooms, 1 ob per room
+
+    elif  room_choice == "grid_4x4": #4x4 rooms, 1 ob per room - NO ALIAS
+
+        rooms = np.array(
+            [
+                [0, 1, 2, 3],
+                [7, 6, 5, 4],
+                [8, 9, 10, 11],
+                [12, 13, 14, 15],
+            ]
+        )
+    else:
+        raise "Room_choice "+ str(room_choice) +"is an invalid choice"
+    
+    custom_colors = (
+        np.array(
+            [
+                [255, 0, 0],#red
+                [0, 255, 0], #green
+                [50,50, 255], #bluish 
+                [112, 39, 195], #purple
+                [255, 255, 0], #yellow
+                [100, 100, 100], #grey
+                [115, 60, 60], #brown
+                [255, 255, 255], #white
+                [80, 145,80], #kaki
+                [201,132,226], #pink
+                [75,182,220], #turquoise
+                [255,153,51], #orange
+                [255,204,229], #light pink
+                [153,153,0], #ugly brown 
+                [229,255,204], #light green
+                [204,204,255],#light purple
+                [0, 153,153], #dark turquoise
+            ]
+        )
+        / 256
+    )
+
+    cmap = create_custom_cmap(custom_colors[:rooms.max()+1])
+    return rooms, cmap
+
