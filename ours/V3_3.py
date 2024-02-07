@@ -9,10 +9,11 @@ from ours.pymdp import control, inference
 from ours.pymdp.agent import Agent
 from envs.modules import reverse_action, next_p_given_a
 from ours.modules import *
+from ours.pymdp.maths import spm_dot
 
 #==== INIT AGENT ====#
 class Ours_V3_3():
-    def __init__(self, num_obs=2, num_states=2, observations=[0,(0,0)], learning_rate_pB=3.0, actions= {'Left':0}, \
+    def __init__(self, num_obs=2, num_states=2, dim=2, observations=[0,(0,0)], learning_rate_pB=3.0, actions= {'Left':0}, \
                  utility_term=True, set_stationary_B=True) -> None:
         self.agent_state_mapping = {}
         self.pose_mapping = []
@@ -20,22 +21,39 @@ class Ours_V3_3():
         self.preferred_ob = [-1,-1]
         self.agent = None
         self.set_stationary_B = set_stationary_B
+        self.step_possible_actions = [self.possible_actions.values()]
         self.initialisation(num_obs=num_obs, num_states=num_states, observations=observations, \
-                            learning_rate_pB=learning_rate_pB, lookahead=4, utility_term= utility_term)
+                            learning_rate_pB=learning_rate_pB, dim=dim, lookahead=4, utility_term= utility_term)
 
-    def initialisation(self,num_obs=2, num_states=2, observations=[0,(0,0)], learning_rate_pB=3.0, dim=2, lookahead=4, utility_term=True):
+    def initialisation(self,num_obs:int=2, num_states:int=2, observations:list=[0,(0,0)], 
+                       learning_rate_pB:float=3.0, dim:int=2, lookahead:int=4, utility_term:bool=True):
         """ Create agent and initialise it with env first given observations """
-        pose  = observations[1] #start pose in map
-        o = observations[0]
-        self.pose_mapping.append(pose)
-        p_idx = self.pose_mapping.index(pose)
+
+        ob = observations[0]
+        p_idx = -1
+        if dim > 1:
+            #start pose in map
+            if len(observations) < 2:
+                observations.append((0,0))
+            self.current_pose = observations[1]
+            self.pose_mapping.append(observations[1])
+            p_idx = self.pose_mapping.index(observations[1])
+            observations[1] = p_idx
+            
+        else:
+            self.current_pose = (0,0)
+            self.pose_mapping.append(self.current_pose)
+            p_idx = self.pose_mapping.index(self.current_pose)
+        
 
         #INITIALISE AGENT
         B_agent = create_B_matrix(num_states,len(self.possible_actions))
         if 'STAY' in self.possible_actions and self.set_stationary_B:
             B_agent = set_stationary(B_agent,self.possible_actions['STAY'])
         pB = utils.to_obj_array(B_agent)
-        obs_dim = [np.max([num_obs,o+1]), np.max([num_obs,p_idx+1])]
+
+        obs_dim = [np.max([num_obs, ob + 1])] + ([np.max([num_obs, p_idx + 1])] if dim > 1 else [])
+        
         A_agent = create_A_matrix(obs_dim,[num_states]*dim,dim)
 
         pA = utils.dirichlet_like(A_agent, scale = 1)
@@ -45,8 +63,9 @@ class Ours_V3_3():
         
         self.agent.qs[0] = utils.onehot(0, num_states)
         self.agent.qs_hist.append(self.agent.qs)
-        self.update_A_with_data([o,p_idx],0)
-        self.update_agent_state_mapping(pose, o, 0)
+        self.update_A_with_data(observations,0)
+        
+        self.update_agent_state_mapping(self.current_pose, observations, 0)
         return self.agent
     
     def update_preference(self, obs:list):
@@ -95,7 +114,15 @@ class Ours_V3_3():
         #self.agent.use_states_info_gain = True #Should we
         self.agent.use_utility = False
 
-    def update_agent_state_mapping(self, pose:tuple, ob:int, state_belief:list=None)-> dict:
+    def from_pose_to_idx(self, poses):
+        poses_idx = [self.pose_mapping.index(v) if v in self.pose_mapping else ValueError for v in poses]
+
+        if ValueError in poses_idx:
+            raise ValueError("unrecognised "+str(poses[poses_idx.index(ValueError)]) +" position in observations")
+        
+        return poses_idx
+    
+    def update_agent_state_mapping(self, pose:tuple, ob:list, state_belief:list=None)-> dict:
         """ Dictionnary to keep track of believes and associated obs, usefull for testing purposes mainly"""
         if state_belief is None:
             state = -1
@@ -103,24 +130,38 @@ class Ours_V3_3():
             state = np.argmax(state_belief)
         #If we already have an ob, let's not squish it with ghost nodes updates
         if pose in self.agent_state_mapping.keys() and self.agent_state_mapping[pose]['ob'] != -1:
-            ob = self.agent_state_mapping[pose]['ob']
-        self.agent_state_mapping[pose] = {'state' : state , 'ob': ob}
+            ob[0] = self.agent_state_mapping[pose]['ob']
+        self.agent_state_mapping[pose] = {'state' : state , 'ob': ob[0]}
+        if len(ob) > 1:
+           self.agent_state_mapping[pose]['ob2'] =  ob[1] 
+      
         return self.agent_state_mapping
 
     def get_current_belief(self):
         return self.agent.qs
     
+    def infer_pose(self, action):
+        if action in self.step_possible_actions:
+           self.current_pose = next_p_given_a(self.current_pose, self.possible_actions, action) 
+        return self.current_pose
+
     def infer_action(self, **kwargs):
-        observations = kwargs.get('observation', None)
+        # observations = kwargs.get('observation', None)
+        self.step_possible_actions = kwargs.get('next_possible_actions', self.possible_actions.values())
+        qs_hist = self.agent.qs_hist[-2:]
+        #prior = np.pad(qs_hist[-2][0], (0, max(len(qs_hist[-2][0]), len(qs_hist[-1][0])) - len(qs_hist[-2][0])), mode='constant')
         prior = self.agent.qs[0].copy()
-        if observations is not None:
-            #NB: Only give obs if state not been inferred before 
-            #(meaning if no step update)
-            observations[1] = self.pose_mapping.index(observations[1])
-            qs = self.agent.infer_states(observations, distr_obs=False)
+        # if observations is not None:
+        #     #NB: Only give obs if state not been inferred before 
+        #     #(meaning if no step update)
+        #     observations[1] = self.pose_mapping.index(observations[1])
+        #     qs = self.agent.infer_states(observations, distr_obs=False)
+                
         q_pi, efe = self.agent.infer_policies()
         action = self.agent.sample_action()
-
+        
+        #NOTE: i think this is NOT what i want to observe... to correct later
+        prior = spm_dot(self.agent.B[0][:, :, int(action)], prior)
         posterior = self.agent.qs[0].copy()
         return int(action), {
             "qs": posterior,
@@ -148,9 +189,10 @@ class Ours_V3_3():
     def update_A_with_data(self,obs:list, state:int)->np.ndarray:
         """Given obs and state, update A entry """
         A = self.agent.A
-        for dim,ob in enumerate(obs):
+        
+        for dim in range(self.agent.num_modalities ):
             A[dim][:,state] = 0
-            A[dim][ob,state] = 1
+            A[dim][obs[dim],state] = 1
         self.agent.A = A
         return A
 
@@ -198,22 +240,23 @@ class Ours_V3_3():
         num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A=A)
         
         # Calculate the maximum dimension increase needed across all modalities
-        dim_add = int(max(0,pose_idx + 1 - num_obs[1]))
+        dim_add = int(max(0,pose_idx + 1 - num_obs[num_modalities-1]))
         # Update matrices size
         #and associate new observations with the newest state generated
         if dim_add > 0:
             A[0] = update_A_matrix_size(A[0], add_state=dim_add, null_proba=null_proba)
-            A[1] = update_A_matrix_size(A[1], add_ob=dim_add, add_state=dim_add, null_proba=null_proba)
-            #we search the first fully null or normed column (thus no link between state -> ob) #THIS IS MAINLY FOR SECURITY
-            columns_wthout_data = np.sort(np.append(np.where(np.all(A[1] == 1/A[1].shape[0], axis=0))[0], np.where(np.all(A[1] == 0, axis=0))[0]))
-            A[1][:, columns_wthout_data[0]] = 0
-            A[1][pose_idx, columns_wthout_data[0]] = 1
+            if num_modalities > 1:
+                A[1] = update_A_matrix_size(A[1], add_ob=dim_add, add_state=dim_add, null_proba=null_proba)
+                #we search the first fully null or normed column (thus no link between state -> ob) #THIS IS MAINLY FOR SECURITY
+                columns_wthout_data = np.sort(np.append(np.where(np.all(A[1] == 1/A[1].shape[0], axis=0))[0], np.where(np.all(A[1] == 0, axis=0))[0]))
+                A[1][:, columns_wthout_data[0]] = 0
+                A[1][pose_idx, columns_wthout_data[0]] = 1
+                self.agent.num_obs[1] = A[1].shape[0]
+
             if self.agent.pA is not None:
                 self.agent.pA = utils.dirichlet_like(utils.to_obj_array(A), scale=1)
-            
-        
-        self.agent.num_obs[1] = A[1].shape[0]
-        self.agent.num_states = [A[1].shape[1]]
+                    
+        self.agent.num_states = [A[0].shape[1]]
         self.agent.A = A
         return A
     
@@ -265,7 +308,7 @@ class Ours_V3_3():
                     self.update_B_dim_given_A()
                     hypo_qs = self.infer_states_no_history([p_idx], partial_ob=1)
                     self.update_B(hypo_qs, self.agent.qs, action, lr_pB = 3) 
-                    self.update_agent_state_mapping(n_pose, -1, hypo_qs[0])
+                    self.update_agent_state_mapping(n_pose, [-1], hypo_qs[0])
                 # a_inv = reverse_action(self.possible_actions, action)
                 # self.update_B(self.agent.qs, hypo_qs, a_inv, lr_pB = 1)
         
@@ -369,7 +412,12 @@ class Ours_V3_3():
     #==== BELIEVES PROCESS UPDATE ====#
     def agent_step_update(self, action, observations = [0,(0,0)], possible_next_actions:list=[0,1,2,3]):
         ob = observations[0]
-        pose = observations[1]
+        if len(observations) > 1:
+            self.current_pose = observations[1]
+        else:
+            self.current_pose = self.infer_pose(action)
+        pose = self.current_pose
+
         if pose not in self.pose_mapping:
             self.pose_mapping.append(pose)
         p_idx = self.pose_mapping.index(pose)
@@ -387,7 +435,7 @@ class Ours_V3_3():
         
         #4.5 UPDATE A AND B WITH THOSE BELIEVES
         self.update_believes_v2(Qs, action, [ob,p_idx])
-        self.update_agent_state_mapping(pose, ob, self.agent.qs[0])
+        self.update_agent_state_mapping(pose, [ob,p_idx], self.agent.qs[0])
         
         #ADD KNOWLEDGE WALL T OR GHOST NODES
         #inv_action = reverse_action(self.possible_actions, action) #just to gain some computation time

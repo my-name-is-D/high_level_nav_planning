@@ -1,26 +1,37 @@
 import numpy as np
-from visualisation_tools import create_custom_cmap
+# from visualisation_tools import create_custom_cmap
+from envs.modules import get_l2_distance, astar
 
 class GridWorldEnv():
     
-    def __init__(self, room_choice:str, actions:dict):
+    def __init__(self, room_choice:str, actions:dict, max_steps:int = False, goal:int=-1, **kwargs):
         self.state_mapping = {}
+        self.step_count = 0
+        self.goal_ob = goal
+        self.max_steps = max_steps
+        self.curr_loc = (0,0)
         self.rooms, self.rooms_colour_map = setup_grid(room_choice)
         self.possible_actions = {k.upper(): v for k, v in actions.items()}
-
         self.unknown_rooms = np.ones_like(self.rooms) -2
     
-    def step(self,a, prev_p):
+    def step(self,a, prev_p=None):
+        if prev_p is None:
+            prev_p = self.curr_loc
+        self.step_count +=1
+        reward = 0
         #self.state = np.dot(self.B[:,:,a], self.state)
         next_pos = self.next_p_given_a_known_env(prev_p, a)
-        
+        self.curr_loc = next_pos
         # obs = utils.sample(np.dot(self.A, self.state))
-
         #obs = rooms[next_pos[0], next_pos[1]]
         self.update_rooms_obs(next_pos)
-        obs = self.get_ob_given_p(next_pos)
-        self.update_states(next_pos, obs)
-        return obs, next_pos
+        colour_ob = self.get_ob_given_p(next_pos)
+        self.update_states(next_pos, colour_ob)
+        if colour_ob == self.goal_ob:
+            reward = self._reward()
+        done = False
+        
+        return [colour_ob, next_pos] , reward,  done, {}
     
     def hypo_step(self,a, prev_p):
         #self.state = np.dot(self.B[:,:,a], self.state)
@@ -28,8 +39,12 @@ class GridWorldEnv():
         obs = self.get_ob_given_p(next_pos)
         return obs, next_pos
 
-    def reset(self, pose):
+    def reset(self, pose=None):
+        if pose is None:
+            pose = (0,0)
         self.state_mapping = {}
+        self.step_count = 0
+        self.curr_loc = pose
         self.unknown_rooms = np.ones_like(self.rooms) -2
         # obs = rooms[pose[0], pose[1]]
         self.update_rooms_obs(pose)
@@ -37,8 +52,49 @@ class GridWorldEnv():
         self.update_states(pose, obs)
         
         # obs = utils.sample(np.dot(self.A, self.state))
-        return obs
+        return [obs, pose], {}
     
+    def _reward(self):
+        """
+        Compute the reward to be given upon success
+        """
+        if self.max_steps:
+            return 1 - 0.9 * (self.step_count / self.max_steps)
+        else:
+            return 1
+        
+
+    def get_short_term_goal(self, input=None):
+
+        if input is None:
+            start_pose = self.curr_loc
+        elif isinstance(input, dict):
+            start_pose = input['pose_pred']
+        else:
+            raise ValueError('get_short_term_goal:Input type not recognised ' + str(type(input)))
+
+        output = np.zeros((3))
+        goal_poses_row, goal_poses_col = self.get_goal_position(self.goal_ob)
+        all_relative_dists = []
+        for r, c in zip(goal_poses_row,goal_poses_col):
+            relative_dist = get_l2_distance(r, start_pose[0], c, start_pose[1])
+            all_relative_dists.append(relative_dist)
+        
+        closest_goal_idx = np.argmin(all_relative_dists)
+        goal_row = goal_poses_row[closest_goal_idx]
+        goal_col = goal_poses_col[closest_goal_idx]
+        path = astar(self.rooms, start_pose, (goal_row, goal_col))
+        
+        output[0] = int((0%360.)/5.) #angle
+        output[1] = len(path) -1 #step dist
+        output[2] = path #gt path #NB: might not be the unique best path
+        return output
+
+    def get_goal_position(self, goal):
+        #Get the goal pose as x, y or row, column
+        goal_poses = np.where(self.rooms == goal)
+        return goal_poses[0], goal_poses[1]
+
     def update_states(self,pose, ob):
         """ create state if needed """
         if pose not in self.state_mapping.keys():
@@ -148,6 +204,15 @@ def setup_grid(room_choice:str = 'grid_3x3'):
                 [6, 7, 8],
             ]
         ) 
+    elif  room_choice == "grid_3x3_test": #3x3 rooms, 1 ob per room - NO ALIAS
+
+        rooms = np.array(
+            [
+                [0, 1, 2],
+                [4, 5, 3],
+                [8, 7, 6],
+            ]
+        ) 
 
     elif  room_choice == "grid_3x4_alias": #3x4 rooms, 1 ob per room - WT ALIAS
 
@@ -211,3 +276,6 @@ def setup_grid(room_choice:str = 'grid_3x3'):
     cmap = create_custom_cmap(custom_colors[:rooms.max()+1])
     return rooms, cmap
 
+def create_custom_cmap(custom_colors):
+    from matplotlib import colors
+    return colors.ListedColormap(custom_colors[:])

@@ -8,6 +8,7 @@ import copy
 from ours.pymdp.agent import Agent
 from ours.pymdp import utils
 from ours.pymdp.maths import spm_dot
+from envs.modules import next_p_given_a
 
 import pandas as pd
 
@@ -110,7 +111,7 @@ def datagen_structured_obs_room(
 
 
 class CHMM(object):
-    def __init__(self, n_clones, x, a, pseudocount=0.0, dtype=np.float32, seed=42, set_stationary_B=True):
+    def __init__(self, n_clones, x, a, possible_actions, pseudocount=0.0, dtype=np.float32, seed=42, set_stationary_B=True):
         """Construct a CHMM objct. n_clones is an array where n_clones[i] is the
         number of clones assigned to observation i. x and a are the observation sequences
         and action sequences, respectively."""
@@ -123,11 +124,13 @@ class CHMM(object):
         self.dtype = dtype
         n_states = self.n_clones.sum()
         self.n_actions = a.max() + 1
+        self.possible_actions = possible_actions
         self.C = np.random.rand(self.n_actions, n_states, n_states).astype(dtype)
         self.Pi_x = np.ones(n_states) / n_states
         self.Pi_a = np.ones(self.n_actions) / self.n_actions
         self.update_T()
         self.agent_state_mapping = {}
+        self.pose_mapping = []
         self.states = []
         self.set_stationary_B = set_stationary_B
         A, B = self.extract_AB(reduce=False, do_add_stationary= False, do_add_death=False)
@@ -142,8 +145,28 @@ class CHMM(object):
     def get_current_belief(self):
         return self.agent.qs
     
+    def infer_pose(self, action, next_possible_actions):
+        if action in next_possible_actions:
+           self.current_pose = next_p_given_a(self.current_pose, self.possible_actions, action) 
+        return self.current_pose
+    
+    def update_agent_state_mapping(self, pose:tuple, ob:int, state_belief:list=None)-> dict:
+        """ Dictionnary to keep track of believes and associated obs, usefull for testing purposes mainly"""
+        if state_belief is None:
+            state = -1
+        else:
+            state = np.argmax(state_belief)
+        #If we already have an ob, let's not squish it with ghost nodes updates
+        if pose in self.agent_state_mapping.keys() and self.agent_state_mapping[pose]['ob'] != -1:
+            ob = self.agent_state_mapping[pose]['ob']
+        elif pose not in self.agent_state_mapping.keys():
+            self.pose_mapping.append(pose)
+        p_idx = self.pose_mapping.index(pose)
+        self.agent_state_mapping[pose] = {'state' : state , 'ob': ob, 'ob2': p_idx}
+        return self.agent_state_mapping
+    
     def infer_action(self, **kwargs):
-        obs=kwargs.get('observation',-1)
+        obs=kwargs.get('observation',[-1])
         next_possible_actions = kwargs.get('next_possible_actions',[*range(self.n_actions)])
         random = kwargs.get('random_policy', False)
         if random:
@@ -155,8 +178,17 @@ class CHMM(object):
         prior = self.agent.qs[0].copy()
         if self.prev_action is not None:
             prior = spm_dot(self.agent.B[0][:, :, self.prev_action], prior)
-
-        qs = self.agent.infer_states([obs])
+            #TODO: CHECK PRIOR
+        if len(obs) > 1:
+            self.update_agent_state_mapping(obs[1], obs[0])
+            obs = [self.pose_mapping.index(obs[1])]
+        elif isinstance(obs[0], tuple):
+            if obs[0] not in self.pose_mapping:
+                self.pose_mapping.append(obs[0])
+            obs = [self.pose_mapping.index(obs[0])]  
+        
+  
+        qs = self.agent.infer_states(obs)
 
         action = int(self.get_action(qs,next_possible_actions))
 
@@ -170,6 +202,9 @@ class CHMM(object):
             "qs": self.agent.qs[0],
             "bayesian_surprise": utils.bayesian_surprise(posterior, prior),
             }
+    
+    def get_pose_mapping(self):
+        return self.pose_mapping
     
     def get_action(self, qs,next_possible_actions):
         # states = np.where(qs[0][:-1] > 1e-4)[0]
@@ -207,8 +242,16 @@ class CHMM(object):
             action = np.random.choice(plans, p=pq)
         return action
     
-    def get_agent_state_mapping(self, x,a, agent_pose):
-        self.define_agent_state_mapping(x,a, agent_pose)
+    def from_pose_to_idx(self, poses):
+        poses_idx = [self.pose_mapping.index(v) if v in self.pose_mapping else ValueError for v in poses]
+
+        if ValueError in poses_idx:
+            raise ValueError("unrecognised "+str(poses[poses_idx.index(ValueError)]) +" position in observations")
+        
+        return poses_idx
+    def get_agent_state_mapping(self, x=None,a=None, agent_pose=None):
+        if x is not None:
+            self.define_agent_state_mapping(x,a, agent_pose)
         return self.agent_state_mapping
     
     def get_B(self, set_stationary_B=None):
@@ -284,17 +327,27 @@ class CHMM(object):
         return len(self.states)
 
     def define_agent_state_mapping(self, x, a, agent_poses):
-        x = np.array(x).flatten().astype(int)
+        
         a = np.array(a).flatten().astype(int)
-        states = self.decode(x, a)[1]
-     
+        obs = self.format_observations(x)
+        states = self.decode(obs, a)[1]
+         
         values = []
         for p_idx in range(len(agent_poses)-1, 0, -1):
             pose = tuple(agent_poses[p_idx])
             state = states[p_idx] 
             if state not in values or pose not in self.agent_state_mapping.keys() :
-                self.agent_state_mapping[pose] = {'state': state, 'ob': int(x[p_idx])}
+                if pose not in self.agent_state_mapping.keys() :
+                    self.agent_state_mapping[pose] = {}
+
+                self.agent_state_mapping[pose]['state'] = state
+                if isinstance(x[0], np.ndarray):
+                    self.agent_state_mapping[pose]['ob'] = x[p_idx,0]
+                    self.agent_state_mapping[pose]['ob2'] = x[p_idx,1]
+                else:
+                    self.agent_state_mapping[pose]['ob'] = obs[p_idx]
                 values.append(state)
+        self.agent_state_mapping = dict(sorted(self.agent_state_mapping.items(), key=lambda x: x[1]['state']))
         return 
 
     def agent_step_update(self,action,obs,next_possible_actions):
@@ -364,6 +417,16 @@ class CHMM(object):
             return [-1], [-1]
         return s_a
 
+
+    def format_observations(self,x):
+        if isinstance(x[0], np.ndarray):
+            if np.max(x[:,1]) > len(self.n_clones):
+                raise 'Observation value above agent n_clones set capacity'
+            x = np.array(x[:,1]).flatten().astype(np.int64)
+        else:
+            x = np.array(x).flatten().astype(np.int64)
+        return x
+    
     def update_T(self):
         """Update the transition matrix given the accumulated counts matrix."""
         self.T = self.C + self.pseudocount
@@ -412,6 +475,7 @@ class CHMM(object):
 
     def decode(self, x, a):
         """Compute the MAP assignment of latent variables using max-product message passing."""
+        x = self.format_observations(x)
         log2_lik, mess_fwd = forward_mp(
             self.T.transpose(0, 2, 1),
             self.Pi_x,
@@ -440,7 +504,7 @@ class CHMM(object):
 
     def learn_em_T(self, x, a, n_iter=100, term_early=True):
         """Run EM traself.update_T()ining, keeping E deterministic and fixed, learning T"""
-        
+        x = self.format_observations(x)
         sys.stdout.flush()
         convergence = []
         pbar = trange(n_iter, position=0)
@@ -469,6 +533,8 @@ class CHMM(object):
 
     def learn_viterbi_T(self, x, a, n_iter=100):
         """Run Viterbi training, keeping E deterministic and fixed, learning T"""
+        x = self.format_observations(x)
+
         sys.stdout.flush()
         convergence = []
         pbar = trange(n_iter, position=0)

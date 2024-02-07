@@ -104,23 +104,29 @@ def create_store_path(model_name, env_name):
     return store_path.resolve()
 
 def set_models(model_name:str, actions:dict, rooms:np.ndarray, \
-               c_ob:int, start_pose:tuple, start_state:int):
+               obs_c_p:list, start_state:int):
+    if 'pose' in model_name:
+        observation = obs_c_p
+        n_emissions = rooms.shape[0] * rooms.shape[1]
+    else:
+        observation = [obs_c_p[0]]
+        n_emissions = rooms.max() + 1
+
     if 'ours_v3' in model_name:
             model = Ours_V3_3(num_obs=2, \
-                num_states=2, observations=[c_ob,start_pose], \
-                    learning_rate_pB=3.0, actions= actions)
+                num_states=2, observations=observation, \
+                    learning_rate_pB=3.0, actions= actions) #dim is still 2 set as default
     elif 'ours_v1' in model_name:
-            model  = Ours_V1(num_obs=2, \
-                num_states=2, observations=[c_ob,start_state], \
+            model = Ours_V1(num_obs=2, \
+                num_states=2, observations=[observation[0],start_state], \
                 learning_rate_pB=3.0, actions= actions)
     elif 'cscg' in model_name:
-        n_emissions = rooms.max() + 1
         n_clones = np.ones(n_emissions, dtype=np.int64) * 10
         n_actions = max(list(actions.values()))
         x = np.array([0])
         a = np.array([n_actions])
-        model  =  CHMM(n_clones=n_clones, pseudocount=0.002, \
-                       x=x, a=a, seed=42, set_stationary_B=True) 
+        model = CHMM(n_clones=n_clones, pseudocount=0.002, \
+                       x=x, a=a, possible_actions=actions, seed=42, set_stationary_B=True) 
     else:
         raise ValueError(str(model_name) + ' is not a recognised model name')
     
@@ -133,7 +139,8 @@ def main(flags):
     env_name = flags.env
     if 'grid' in env_name:
         actions = {'LEFT':0, 'RIGHT':1, 'UP':2, 'DOWN':3, 'STAY':4}
-        env = GridWorldEnv(env_name, actions)
+        env = GridWorldEnv(env_name, actions,\
+                        max_steps=flags.max_steps, goal=flags.goal)
         perfect_B, desired_state_mapping = env.define_perfect_B()
     
         #adapt policy type (given or not)
@@ -144,12 +151,12 @@ def main(flags):
             policy= None
             pose = tuple(flags.start_pose)
 
-        ob_1 = env.reset(pose)
+        obs_c_p,_ = env.reset(pose)
         state = env.get_state(pose)
         
         #SET MODEL
         if flags.load_model != 'None' :
-            print('Loading from: ', flags.load_model)
+            print('Loading model from: ', flags.load_model)
             model = load_object(flags.load_model)
             model_path = flags.load_model.split('/')
             model_name = next((item for item in model_path if any(model in item for model in available_models)), None)
@@ -157,7 +164,7 @@ def main(flags):
             #model_name = [substring for substring in available_models if substring == flags.load_model][0]
         else:
             print('Creating model: ', flags.model)
-            model = set_models(flags.model, actions, env.rooms, ob_1, pose, state)
+            model = set_models(flags.model, actions, env.rooms, obs_c_p, state)
             model_name = flags.model
         print('model_name', model_name)
 

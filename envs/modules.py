@@ -1,6 +1,14 @@
 import numpy as np
 from visualisation_tools import B_to_ideal_B
 
+
+def get_l2_distance(x1, x2, y1, y2):
+    """
+    Computes the L2 distance between two points.
+    """
+    return ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5
+
+
 def reverse_action(actions:dict, action:int)->int:
     actions =  {k.upper(): v for k, v in actions.items()}
     action_key = list(filter(lambda x: actions[x] == action, actions))[0] 
@@ -55,3 +63,50 @@ def agent_B_match_ideal_B_v2(agent_B, perfect_B, agent_state_mapping, desired_st
     match_result = np.array_equal(np.array(matching_indices) ,np.array(np.where(non_zero_mask)))
     
     return match_result
+
+
+def discretize(dist):
+    dist_limits = [0.25, 3, 10]
+    dist_bin_size = [0.05, 0.25, 1.]
+    if dist < dist_limits[0]:
+        ddist = int(dist/dist_bin_size[0])
+    elif dist < dist_limits[1]:
+        ddist = int((dist - dist_limits[0])/dist_bin_size[1]) + \
+            int(dist_limits[0]/dist_bin_size[0])
+    elif dist < dist_limits[2]:
+        ddist = int((dist - dist_limits[1])/dist_bin_size[2]) + \
+            int(dist_limits[0]/dist_bin_size[0]) + \
+            int((dist_limits[1] - dist_limits[0])/dist_bin_size[1])
+    else:
+        ddist = int(dist_limits[0]/dist_bin_size[0]) + \
+            int((dist_limits[1] - dist_limits[0])/dist_bin_size[1]) + \
+            int((dist_limits[2] - dist_limits[1])/dist_bin_size[2])
+    return ddist
+
+
+def heuristic(curr_pos, goal):
+    return abs(curr_pos[0] - goal[0]) + abs(curr_pos[1] - goal[1])
+
+def astar(env, start, goal):
+    if env[start[0]][start[1]] == 1 or env[goal[0]][goal[1]] == 1:
+        return None  # Start or goal position is blocked
+    
+    rows, cols = len(env), len(env[0])
+    visited = set()
+    pq = [(0, start, [])]  # (f_score, position, path)
+    
+    while pq:
+        pq.sort(reverse=True)  # Sort descending based on f_score
+        f_score, curr_pos, path = pq.pop()
+        if curr_pos == goal:
+            return path + [curr_pos]
+        
+        visited.add(curr_pos)
+        for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+            r, c = curr_pos[0] + dr, curr_pos[1] + dc
+            if 0 <= r < rows and 0 <= c < cols and env[r][c] != 1 and (r, c) not in visited:
+                new_f_score = len(path) + 1 + heuristic((r, c), goal)
+                pq.append((new_f_score, (r, c), path + [curr_pos]))
+                visited.add((r, c))
+    
+    return None  # Goal not reachable

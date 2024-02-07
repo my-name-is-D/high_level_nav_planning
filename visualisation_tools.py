@@ -77,15 +77,26 @@ def make_segments(x, y):
 #==== SAVING PLOTS ====#
 
 def save_transitions_plots(model, model_name, actions, desired_state_mapping, run_logs, cmap,store_path):
-    agent_state_mapping = model.get_agent_state_mapping(run_logs['c_obs'],run_logs['actions'][1:], run_logs['poses'])
+    if 'pose' in model_name:
+        poses_idx = model.from_pose_to_idx(run_logs['poses'])
+        observations = np.array([np.array([c, p], dtype=object) for c, p in zip(run_logs['c_obs'], poses_idx)])
+    else:
+        observations = run_logs['c_obs']
+    agent_state_mapping = model.get_agent_state_mapping(observations,run_logs['actions'][1:], run_logs['poses'])
     Transition_matrix = model.get_B()
     T_plot = plot_transition_detailed_resized(Transition_matrix, actions, agent_state_mapping, desired_state_mapping, plot=False)
     plt.savefig(store_path / 'model_transitions.jpg')
     plt.close()
+
+    if 'pose' in model_name:
+        poses_idx = model.from_pose_to_idx(run_logs['poses'])
+        observations = np.array([np.array([c, p], dtype=object) for c, p in zip(run_logs['c_obs'], poses_idx)])
+    else:
+        observations = run_logs['c_obs']
         
     if 'ours' in model_name:
         v = [value['state'] for value in agent_state_mapping.values()]
-        obs = [value['ob'] for value in agent_state_mapping.values()]
+        # obs = [value['ob'] for value in agent_state_mapping.values()]
         T = Transition_matrix[v,:][:,v,:]
         A = T.sum(2).round(1)
         div = A.sum(1, keepdims=True)
@@ -109,7 +120,9 @@ def save_transitions_plots(model, model_name, actions, desired_state_mapping, ru
         A = T.sum(0)
         div = A.sum(1, keepdims=True)
         A /= (div + 0.0001)
-        plot_cscg_graph(A, run_logs['c_obs'], v, model.n_clones,  store_path, cmap)
+        
+        state_map = model.get_agent_state_mapping(observations,run_logs['actions'][1:],run_logs['poses'])
+        plot_cscg_graph(A, observations, v, model.n_clones, state_map, store_path, cmap)
 
 def generate_csv_report(run_logs, flags, store_path):
     if 'frames' in run_logs.keys():
@@ -371,18 +384,26 @@ def plot_graph_as_cscg(A, agent_state_mapping, cmap,store_path, edge_threshold= 
 
 #==== GRAPH PLOT CSCG ====#
 def plot_cscg_graph(
-    A, x, v, n_clones,  store_path, cmap=cm.Spectral, vertex_size=30
+    A, x, v, n_clones,agent_state_mapping, store_path, cmap=cm.Spectral, vertex_size=30
 ):
+    v_map = [value['state'] for value in agent_state_mapping.values()]
+    obs = [value['ob'] for value in agent_state_mapping.values()]
+    colors = [cmap(nl)[:3] for nl in obs]
+    # if isinstance(x[0], np.ndarray):
+        
+    if not len(v_map) == len(v) :
+        print('states don-t match agent_state_mapping')
+        try:
+            if isinstance(x[0], np.ndarray):
+                x = x[:,0]
+            node_labels = np.arange(np.max(x) + 1).repeat(n_clones)[v]
+        except ValueError:
+            print('Value error in plot_cscg_graph')
+            node_labels = np.arange(np.min([A.shape[0], len(n_clones)])).repeat(n_clones)[v]        
+        colors = [cmap(nl)[:3] for nl in node_labels / node_labels.max()]
 
     g = igraph.Graph.Adjacency((A > 0).tolist())
-    try:
-        node_labels = np.arange(np.max(x) + 1).repeat(n_clones)[v]
-    except ValueError:
-        print('Value error in plot_cscg_graph')
-        node_labels = np.arange(A.shape[0]).repeat(n_clones)[v]
-        
-        
-    colors = [cmap(nl)[:3] for nl in node_labels / node_labels.max()]
+    
     # plot_name = 'figures/'+ specific_str + 'graph_0'
     # count = 0
     # while os.path.exists(plot_name+'.png'):

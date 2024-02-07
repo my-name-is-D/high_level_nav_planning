@@ -19,6 +19,11 @@ def minigrid_exploration(env, model, actions, model_name, pose, max_steps, stop_
     frames = [get_frame(env, pose)]
     if given_policy is not None:
         max_steps = len(given_policy)-1
+        
+    if 'pose' in model_name:
+        observation = [ob, pose]
+    else:
+        observation = [ob]
 
     for t in range(1,max_steps+1):
 
@@ -32,17 +37,24 @@ def minigrid_exploration(env, model, actions, model_name, pose, max_steps, stop_
                     else:
                         random_policy = False
                     
-                    action, agent_info = cscg_action_decision(model, ob, env.get_possible_motions(), random_policy)
+                    action, agent_info = cscg_action_decision(model, observation, env.get_possible_motions(), random_policy)
             else:
                 action = given_policy[t]
-                agent_info = {'qs': model.get_current_belief()[0], "bayesian_surprise":0}
+                agent_info = update_model_given_action(model, action, pose)
 
-            ob, pose = env.step(action, pose)
+            obs, _,_,_ = env.step(action, pose)
+            ob, pose = obs
             frames.append(get_frame(env, pose))
             next_possible_actions = env.get_next_possible_motions(pose, no_stay = True)
+            if 'pose' in model_name:
+                if pose not in model.pose_mapping: #this is just a security check
+                    model.pose_mapping.append(pose)
+                observation = [ob, pose]
+            else:
+                observation = [ob]
 
             if 'ours' in model_name:
-                ours_update_agent(model, action, [ob,pose], next_possible_actions)
+                ours_update_agent(model, action, observation, next_possible_actions)
 
             #Save data
             actions.append(action)
@@ -76,7 +88,10 @@ def minigrid_exploration(env, model, actions, model_name, pose, max_steps, stop_
         "error":error_message,
     }
     if 'cscg' in model_name:
-        model, train_progression = train_cscg(model, c_obs, actions[1:])
+        if 'pose' in model_name:
+            observations = np.array([np.array([c, p], dtype=object) for c, p in zip(c_obs, p_obs)])
+        
+        model, train_progression = train_cscg(model, observations, actions[1:])
         data['train_progression'] = train_progression
     
     
@@ -99,11 +114,12 @@ def minigrid_reach_goal(env, model, actions_dict, model_name, pose, max_steps, s
     for t in range(1,max_steps+1):
         try:
             if 'ours' in model_name :
-                action, agent_info = ours_action_decision(model, [ob, pose])
+                action, agent_info = ours_action_decision(model, [ob, pose], next_possible_actions)
             if 'cscg' in model_name:
                 action, agent_info = cscg_action_decision(model, ob, next_possible_actions)
                 
-            ob, pose = env.step(action, pose)
+            obs, _,_,_ = env.step(action, pose)
+            ob, pose = obs
             next_possible_actions = env.get_next_possible_motions(pose, no_stay = False)
             frames.append(get_frame(env, pose))
             if 'ours' in model_name:
@@ -164,17 +180,29 @@ def agent_B_match_ideal_B_v2(model, perfect_B, desired_state_mapping, actions, t
     
     return match_result
 
-def train_cscg(model, c_obs, actions):
-    #len(c_obs) > len(actions), no matter because this algo considers only actions length 
-        
-        c_obs = np.array(c_obs).flatten().astype(np.int64)
-        actions = np.array(actions).flatten().astype(np.int64)
-        progression = model.learn_em_T(c_obs, actions, n_iter=200)  # Training
-        # refine learning
-        model.pseudocount = 0.0001
-        model.learn_viterbi_T(c_obs, actions, n_iter=100)
-        return model, progression
+def train_cscg(model, observations, actions):
+    #len(observations) > len(actions), no matter because this algo considers only actions length 
+    if isinstance(observations[0], np.ndarray) :
+        poses_idx = model.from_pose_to_idx(observations[:,1])
+        observations[:,1] = poses_idx
+    elif isinstance(observations[0], tuple):
+        poses_idx = model.from_pose_to_idx(observations)
+        observations = poses_idx
+    
+    actions = np.array(actions).flatten().astype(np.int64)
 
+    progression = model.learn_em_T(observations, actions, n_iter=200)  # Training
+    # # refine learning
+    model.pseudocount = 0.0001
+    model.learn_viterbi_T(observations, actions, n_iter=100)
+    return model, progression
+
+def update_model_given_action(model:object, action:int, pose:tuple):
+    model.agent.action = np.array([action])
+    model.agent.step_time()
+    if pose not in model.pose_mapping:
+        model.pose_mapping.append(pose)
+    return {'qs': model.get_current_belief()[0], "bayesian_surprise":0}
 #======================= GOAL METHODS ===================================#
 
 def goal_reached(model, action , c_obs, p_obs, actions):
@@ -197,12 +225,12 @@ def cscg_action_decision(cscg, observation, next_possible_actions, random_policy
                             
     return action, agent_info
         
-def ours_action_decision(ours, observation=None):
+def ours_action_decision(ours, observation=None, next_possible_actions=None):
     """ 
     Our model infer an action between all actions and update its believes 
     according to how he moved and where it can move at the next step.
     """
-    action, agent_info = ours.infer_action(observation=observation)
+    action, agent_info = ours.infer_action(observation=observation, next_possible_actions=next_possible_actions)
     return action, agent_info
 
 def ours_update_agent(ours, action, observations, next_possible_actions):
