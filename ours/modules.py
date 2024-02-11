@@ -39,19 +39,20 @@ def run_partial_ob_vanilla_fpi(A, obs, num_obs, num_states, partial_ob=None, pri
     qs: numpy 1D array, numpy ndarray of dtype object, optional
         Marginal posterior beliefs over hidden states at current timepoint
     """
-    if partial_ob:
+    if partial_ob != None:
         A = np.array(A[partial_ob])
+
     # get model dimensions
     n_modalities = len(num_obs)#unused, else would be an issue with partial ob
     n_factors = len(num_states)
-
+    # print('num_states', num_states, A.shape, partial_ob)
     """
     =========== Step 1 ===========
         Loop over the observation modalities and use assumption of independence 
         among observation modalitiesto multiply each modality-specific likelihood 
         onto a single joint likelihood over hidden factors [size num_states]
     """
-    # print(A, obs, num_states)
+  
     likelihood = maths.get_joint_likelihood(A, obs, num_states)
 
     likelihood = maths.spm_log_single(likelihood)

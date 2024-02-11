@@ -88,9 +88,9 @@ def heuristic(curr_pos, goal):
     return abs(curr_pos[0] - goal[0]) + abs(curr_pos[1] - goal[1])
 
 def astar(env, start, goal):
-    if env[start[0]][start[1]] == 1 or env[goal[0]][goal[1]] == 1:
-        return None  # Start or goal position is blocked
-    
+    # if env[start[0]][start[1]] == 1 or env[goal[0]][goal[1]] == 1:
+    #     return None  # Start or goal position is blocked
+   
     rows, cols = len(env), len(env[0])
     visited = set()
     pq = [(0, start, [])]  # (f_score, position, path)
@@ -104,9 +104,21 @@ def astar(env, start, goal):
         visited.add(curr_pos)
         for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
             r, c = curr_pos[0] + dr, curr_pos[1] + dc
-            if 0 <= r < rows and 0 <= c < cols and env[r][c] != 1 and (r, c) not in visited:
-                new_f_score = len(path) + 1 + heuristic((r, c), goal)
-                pq.append((new_f_score, (r, c), path + [curr_pos]))
+            if 0 <= r < rows and 0 <= c < cols and (r, c) not in visited: #env[r][c] != 1 and 
+                new_path = path + [curr_pos]
+                new_f_score = len(new_path) + heuristic((r, c), goal)
+                pq.append((new_f_score, (r, c), new_path))
                 visited.add((r, c))
     
     return None  # Goal not reachable
+
+        
+    #     visited.add(curr_pos)
+    #     for dr, dc in [(0, 1), (1, 0), (0, -1), (-1, 0)]:
+    #         r, c = curr_pos[0] + dr, curr_pos[1] + dc
+    #         if 0 <= r < rows and 0 <= c < cols and env[r][c] != 1 and (r, c) not in visited:
+    #             new_f_score = len(path) + 1 + heuristic((r, c), goal)
+    #             pq.append((new_f_score, (r, c), path + [curr_pos]))
+    #             visited.add((r, c))
+    
+    # return None  # Goal not reachable

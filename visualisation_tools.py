@@ -11,9 +11,10 @@ import copy
 from matplotlib import cm, colors
 import matplotlib.collections as mcoll
 import matplotlib.path as mpath
-import io
+# import io
 import imageio
-
+import bisect
+import os
 
 def onehot(value, num_values):
     arr = np.zeros(num_values)
@@ -101,8 +102,8 @@ def save_transitions_plots(model, model_name, actions, desired_state_mapping, ru
         A = T.sum(2).round(1)
         div = A.sum(1, keepdims=True)
         A /= (div + 0.0001)
-        e_th = 0.06
-        while e_th < 1.5:
+        e_th = 0.1
+        while e_th < 0.6:
             edge_threshold = e_th
             e_th*=1.5
             A[A < edge_threshold] = 0
@@ -159,8 +160,26 @@ def generate_plot_report(run_logs, env, store_path):
     plt.clf()
 
     # Trajectory gif
+    
+    #with imageio.get_writer(store_path / 'test.gif', mode='I') as writer:
+    imgs_path = store_path/ 'imgs'
+    imgs_path.mkdir(exist_ok=True, parents=True)
+    for i in range(len(run_logs["frames"])):
+        img_name = str(i)+'image.jpg'
+        imageio.imwrite(imgs_path / img_name, run_logs['frames'][i])
+        # image = imageio.imread(store_path /name)
+        # writer.append_data(image)
+
     gif_path = store_path / "navigate.gif"
-    imageio.mimsave(gif_path, run_logs["frames"], 'GIF', duration=500)
+    imageio.mimsave(gif_path, [imageio.imread(f"{store_path}/imgs/{i}image.jpg") for i in range(len(run_logs['frames']))], 'GIF', duration=0.5, loop=1)
+    os.system(f'rm -rf {imgs_path}')
+    # with imageio.get_writer(gif_path, mode='I', duration=500) as writer:
+    #     # Append each frame to the GIF writer
+    #     for frame in run_logs["frames"]:
+    #         writer.append_data(frame)
+    
+    # gif_path = store_path / "navigate.gif"
+    # imageio.mimsave(gif_path, run_logs["frames"], 'GIF', duration=500, loop=0)
 
     # Entropy plot
     state_beliefs = [log["qs"] for log in run_logs["agent_info"]]
@@ -213,25 +232,33 @@ def plot_observations_and_states(env, pose, agent_state_map=None):
 #==== MAP PLOTS ====#
     
 def get_frame(env, pose ):
-    
+    fig = plt.figure(1)
     ax = plot_map(env.rooms, cmap=env.rooms_colour_map, show = False)
     ax.text(pose[1], pose[0], str('x'), ha='center', va='center', color='black', fontsize=30)
     
-    # Save axes to BytesIO buffer
-    buffer = BytesIO()
-    plt.savefig(buffer, format='png')
-    buffer.seek(0)
+    fig.canvas.draw()
 
-    # Read image data from BytesIO buffer
-    image = imageio.imread(buffer)
-    # textvar.set_visible(False)
+    # Convert figure to RGB byte string
+    image = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
+    image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
     ax.clear() 
+    plt.close(fig) 
+    image = imageio.core.util.Image(image)
+    # Save axes to BytesIO buffer
+    # buffer = BytesIO()
+    # plt.savefig(buffer, format='png')
+    # buffer.seek(0)
+
+    # # Read image data from BytesIO buffer
+    # image = imageio.imread(buffer)
+    # textvar.set_visible(False)
+    
     return image
 
 def plot_map(rooms, cmap, show = True):
     fig = plt.figure(1)
     ax = plt.subplot(1,1,1)
-    ax.imshow(rooms, cmap=cmap)
+    ax.imshow(rooms, cmap=cmap, alpha=1.0)
     # Set ticks to show only integer values
     ax.set_xticks(np.arange(rooms.shape[1]))
     ax.set_yticks(np.arange(rooms.shape[0]))
@@ -394,13 +421,26 @@ def plot_cscg_graph(
     if not len(v_map) == len(v) :
         print('states don-t match agent_state_mapping')
         try:
-            if isinstance(x[0], np.ndarray):
-                x = x[:,0]
-            node_labels = np.arange(np.max(x) + 1).repeat(n_clones)[v]
+
+            poses = list(agent_state_mapping.keys())
+            obs = []
+            for s in v:
+                if s in v_map:
+                    index = v_map.index(s)
+                else:
+                    index = bisect.bisect_left(v_map, s) -1
+                if index < 0:
+                    index =0
+                obs.append(agent_state_mapping[poses[index]]['ob'])
+            colors = [cmap(nl)[:3] for nl in obs]
+            # if isinstance(x[0], np.ndarray):
+            #     x = x[:,0]
+            # node_labels = np.arange(np.max(x) + 1).repeat(n_clones)[v]
+            #colors = [cmap(nl)[:3] for nl in node_labels / node_labels.max()]
         except ValueError:
             print('Value error in plot_cscg_graph')
             node_labels = np.arange(np.min([A.shape[0], len(n_clones)])).repeat(n_clones)[v]        
-        colors = [cmap(nl)[:3] for nl in node_labels / node_labels.max()]
+            colors = [cmap(nl)[:3] for nl in node_labels / node_labels.max()]
 
     g = igraph.Graph.Adjacency((A > 0).tolist())
     

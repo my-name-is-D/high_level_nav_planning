@@ -24,7 +24,7 @@ class GridWorldEnv():
         self.curr_loc = next_pos
         # obs = utils.sample(np.dot(self.A, self.state))
         #obs = rooms[next_pos[0], next_pos[1]]
-        self.update_rooms_obs(next_pos)
+        # self.update_rooms_obs(next_pos) #that was for test purposes. usefull when generating own ob based on 'new or not'
         colour_ob = self.get_ob_given_p(next_pos)
         self.update_states(next_pos, colour_ob)
         if colour_ob == self.goal_ob:
@@ -47,7 +47,7 @@ class GridWorldEnv():
         self.curr_loc = pose
         self.unknown_rooms = np.ones_like(self.rooms) -2
         # obs = rooms[pose[0], pose[1]]
-        self.update_rooms_obs(pose)
+        # self.update_rooms_obs(pose)
         obs = self.get_ob_given_p(pose)
         self.update_states(pose, obs)
         
@@ -65,7 +65,6 @@ class GridWorldEnv():
         
 
     def get_short_term_goal(self, input=None):
-
         if input is None:
             start_pose = self.curr_loc
         elif isinstance(input, dict):
@@ -73,18 +72,21 @@ class GridWorldEnv():
         else:
             raise ValueError('get_short_term_goal:Input type not recognised ' + str(type(input)))
 
-        output = np.zeros((3))
+        output = [0,0,0]
         goal_poses_row, goal_poses_col = self.get_goal_position(self.goal_ob)
         all_relative_dists = []
         for r, c in zip(goal_poses_row,goal_poses_col):
             relative_dist = get_l2_distance(r, start_pose[0], c, start_pose[1])
             all_relative_dists.append(relative_dist)
-        
+        if len(all_relative_dists) == 0:
+            #Goal not in env
+            return None
         closest_goal_idx = np.argmin(all_relative_dists)
         goal_row = goal_poses_row[closest_goal_idx]
         goal_col = goal_poses_col[closest_goal_idx]
         path = astar(self.rooms, start_pose, (goal_row, goal_col))
-        
+        if path == None:
+            return None
         output[0] = int((0%360.)/5.) #angle
         output[1] = len(path) -1 #step dist
         output[2] = path #gt path #NB: might not be the unique best path
@@ -218,9 +220,9 @@ def setup_grid(room_choice:str = 'grid_3x3'):
 
         rooms = np.array(
             [
-                [0, 0, 1, 4],
+                [0, 2, 1, 4],
                 [2, 0, 1, 3],
-                [3, 3, 3, 0],
+                [3, 0, 3, 0],
             ]
         ) #3x4 rooms, 1 ob per room
     
@@ -245,8 +247,9 @@ def setup_grid(room_choice:str = 'grid_3x3'):
                 [12, 13, 14, 15],
             ]
         )
+    
     else:
-        raise "Room_choice "+ str(room_choice) +"is an invalid choice"
+        raise ValueError("Room_choice "+ str(room_choice) +" is an invalid choice")
     
     custom_colors = (
         np.array(
@@ -278,4 +281,4 @@ def setup_grid(room_choice:str = 'grid_3x3'):
 
 def create_custom_cmap(custom_colors):
     from matplotlib import colors
-    return colors.ListedColormap(custom_colors[:])
+    return colors.ListedColormap(custom_colors[:]) #,  alpha=None)

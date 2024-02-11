@@ -111,7 +111,8 @@ def datagen_structured_obs_room(
 
 
 class CHMM(object):
-    def __init__(self, n_clones, x, a, possible_actions, pseudocount=0.0, dtype=np.float32, seed=42, set_stationary_B=True):
+    def __init__(self, n_clones, x, a, possible_actions, pseudocount=0.0, \
+                 dtype=np.float32, seed=42, set_stationary_B=True, ob_ambiguity=True):
         """Construct a CHMM objct. n_clones is an array where n_clones[i] is the
         number of clones assigned to observation i. x and a are the observation sequences
         and action sequences, respectively."""
@@ -141,6 +142,8 @@ class CHMM(object):
         self.prev_action = None
         self.preferred_states = []
         self.preferred_ob = [-1]
+        self.ob_ambiguity = ob_ambiguity
+        self.current_pose = (0,0)
 
     def get_current_belief(self):
         return self.agent.qs
@@ -156,19 +159,42 @@ class CHMM(object):
             state = -1
         else:
             state = np.argmax(state_belief)
-        #If we already have an ob, let's not squish it with ghost nodes updates
-        if pose in self.agent_state_mapping.keys() and self.agent_state_mapping[pose]['ob'] != -1:
-            ob = self.agent_state_mapping[pose]['ob']
-        elif pose not in self.agent_state_mapping.keys():
+        
+        # If pose already exists in the mapping, update the information
+        if pose in self.agent_state_mapping.keys():
+            existing_info = self.agent_state_mapping[pose]
+            #if we have an ob, let's keep it
+            # if existing_info['ob'] != -1:
+            #     ob = existing_info['ob']
+            state_ob = existing_info.get('state_ob', -1)
+            state = existing_info.get('state', -1)
+        else:
+            # Add new pose to mapping
             self.pose_mapping.append(pose)
+            state_ob = len(self.agent_state_mapping) 
         p_idx = self.pose_mapping.index(pose)
-        self.agent_state_mapping[pose] = {'state' : state , 'ob': ob, 'ob2': p_idx}
-        return self.agent_state_mapping
+            
+        # Update agent state mapping
+        self.agent_state_mapping[pose] = {'state': state, 'state_ob': state_ob, 'ob': ob, 'pose_idx': p_idx}
+        if self.ob_ambiguity:
+            state_ob = ob
+
+        return state_ob
     
     def infer_action(self, **kwargs):
         obs=kwargs.get('observation',[-1])
         next_possible_actions = kwargs.get('next_possible_actions',[*range(self.n_actions)])
         random = kwargs.get('random_policy', False)
+
+        if len(obs) > 1:
+            state_ob = self.update_agent_state_mapping(obs[1], obs[0])
+            obs = [state_ob] 
+            #Pose is an unambigious ob, since we give an int to cscg, still
+            #for future changes in method. let's keep separated.
+        elif isinstance(obs[0], tuple):
+            state_ob = self.update_agent_state_mapping(obs[0], obs[0])
+            obs = [state_ob]  
+
         if random:
             return np.random.choice(next_possible_actions), {
                 "qs": self.agent.qs[0],
@@ -179,15 +205,7 @@ class CHMM(object):
         if self.prev_action is not None:
             prior = spm_dot(self.agent.B[0][:, :, self.prev_action], prior)
             #TODO: CHECK PRIOR
-        if len(obs) > 1:
-            self.update_agent_state_mapping(obs[1], obs[0])
-            obs = [self.pose_mapping.index(obs[1])]
-        elif isinstance(obs[0], tuple):
-            if obs[0] not in self.pose_mapping:
-                self.pose_mapping.append(obs[0])
-            obs = [self.pose_mapping.index(obs[0])]  
         
-  
         qs = self.agent.infer_states(obs)
 
         action = int(self.get_action(qs,next_possible_actions))
@@ -229,7 +247,7 @@ class CHMM(object):
                 actions = [-1]  # just go forward if its already in preferred
                 states = [-1]
                 pq[i] = 0
-
+            
             plans.append(actions[0])
             n_states.append(states[0])
 
@@ -247,13 +265,47 @@ class CHMM(object):
 
         if ValueError in poses_idx:
             raise ValueError("unrecognised "+str(poses[poses_idx.index(ValueError)]) +" position in observations")
-        
         return poses_idx
+    
+    def from_obs_to_ob(self, obs):
+        """obs : [colour, pose] or [pose] 
+        Transform them into state_obs by mapping to colour+pose obs. 
+        Or pose index if [pose]
+        That is if no ambiguous observation.
+        else did not implement
+        """
+        if not self.ob_ambiguity:
+            if obs.shape[1] == 2 :
+                observations = [] 
+                # Create a dictionary for quick lookup based on 'ob' and 'pose'
+                state_mapping_lookup = {(info['ob'], pose): info \
+                                        for pose, info in self.agent_state_mapping.items()}
+                for i, (ob, pose) in enumerate(obs):
+                    # Check if there is a matching entry in the state_mapping_lookup
+                    if (ob, pose) in state_mapping_lookup:
+                        observations.append(state_mapping_lookup[(ob, pose)]['state_ob'])
+                    else:
+                        raise ValueError('Observations ' + str((ob, pose))+ 'not existing in state_mapping')
+                
+            elif isinstance(obs[0], tuple):
+                poses_idx = self.from_pose_to_idx(obs)
+                observations = poses_idx
+        return observations
+
     def get_agent_state_mapping(self, x=None,a=None, agent_pose=None):
         if x is not None:
             self.define_agent_state_mapping(x,a, agent_pose)
         return self.agent_state_mapping
     
+    def set_agent_state_mapping(self, x, agent_pose=None):
+        for id, ob in enumerate(x):
+            if isinstance(ob, np.ndarray):
+                self.update_agent_state_mapping(ob[1], ob[0])
+            else:
+                self.update_agent_state_mapping(agent_pose[id], ob[0])
+        return self.agent_state_mapping
+    
+
     def get_B(self, set_stationary_B=None):
         B = copy.deepcopy(self.T)
         rearranged_B = np.transpose(B,(2,1,0))
@@ -338,24 +390,45 @@ class CHMM(object):
             state = states[p_idx] 
             if state not in values or pose not in self.agent_state_mapping.keys() :
                 if pose not in self.agent_state_mapping.keys() :
-                    self.agent_state_mapping[pose] = {}
-
+                    if pose not in self.pose_mapping:
+                        self.pose_mapping.append(pose)
+                    state_ob = len(self.agent_state_mapping)
+                    self.agent_state_mapping[pose] = {'state_ob':state_ob}
+               
                 self.agent_state_mapping[pose]['state'] = state
                 if isinstance(x[0], np.ndarray):
                     self.agent_state_mapping[pose]['ob'] = x[p_idx,0]
-                    self.agent_state_mapping[pose]['ob2'] = x[p_idx,1]
+                    self.agent_state_mapping[pose]['pose_idx'] = x[p_idx,1]
                 else:
                     self.agent_state_mapping[pose]['ob'] = obs[p_idx]
                 values.append(state)
         self.agent_state_mapping = dict(sorted(self.agent_state_mapping.items(), key=lambda x: x[1]['state']))
         return 
+   
 
     def agent_step_update(self,action,obs,next_possible_actions):
         """ Do nothing, wait for full motion?"""
         return
     
     def goal_oriented_navigation(self, obs):
-        self.update_preference([obs[0]]) # we only want colours as ob
+        if -1 in obs:
+            obs.remove(-1)
+
+        test_obs = obs
+
+        if not self.ob_ambiguity:
+            observation = []
+            for pose, info in self.agent_state_mapping.items():
+                if len(obs) == 2 :
+                    if info['ob'] == obs[0] and pose == obs[1]:
+                        observation = [self.agent_state_mapping[pose]['state_ob']]
+
+                elif info['ob'] == obs[0]:
+                    observation.append(self.agent_state_mapping[pose]['state_ob'])
+        
+            obs = observation
+        print('received obs', test_obs, 'modified obs', obs)
+        self.update_preference(obs) 
     
     def explo_oriented_navigation(self):
         self.update_preference()
@@ -369,15 +442,22 @@ class CHMM(object):
             C = self.agent._construct_C_prior()
             A = self.get_A(reduce=False)[0]
             preferred_ob = []
-            for modality, ob in enumerate(obs):
+            
+            #Only 1 modality, but several goal obs possible
+            for id, ob in enumerate(obs):
                 if ob >= 0:
                     self.preferred_ob = [ob]
                     self.preferred_states += list(A[ob, :].nonzero()[0])
-                    ob_processed = utils.process_observation(ob, 1, [self.agent.num_obs[modality]])
+                    ob_processed = utils.process_observation(ob, 1, [self.agent.num_obs[0]])
                     ob = utils.to_obj_array(ob_processed)
+                    #saving several goals
+                    if id ==0:
+                        ob_modality = ob
+                    else:
+                        ob_modality+= ob
                 else:
-                    ob = utils.obj_array_zeros([self.agent.num_obs[modality]])
-                preferred_ob.append(ob[0])
+                    ob_modality = utils.obj_array_zeros([self.agent.num_obs[0]])
+                preferred_ob.append(ob_modality[0])
                 
             C = np.array(preferred_ob, dtype=object)
 
@@ -387,10 +467,10 @@ class CHMM(object):
                 )
             self.agent.C = utils.to_obj_array(C)
 
-            assert len(self.agent.C) == self.agent.num_modalities, f"Check C vector: number of sub-arrays must be equal to number of observation modalities: {agent.num_modalities}"
+            # assert len(self.agent.C) == self.agent.num_modalities, f"Check C vector: number of sub-arrays must be equal to number of observation modalities: {agent.num_modalities}"
 
-            for modality, c_m in enumerate(self.agent.C):
-                assert c_m.shape[0] == self.agent.num_obs[modality], f"Check C vector: number of rows of C vector for modality {modality} should be equal to {agent.num_obs[modality]}"
+            # for modality, c_m in enumerate(self.agent.C):
+            #     assert c_m.shape[0] == self.agent.num_obs[modality], f"Check C vector: number of rows of C vector for modality {modality} should be equal to {agent.num_obs[modality]}"
             
         else:
             self.agent.C = self.agent._construct_C_prior()
@@ -417,9 +497,10 @@ class CHMM(object):
             return [-1], [-1]
         return s_a
 
-
     def format_observations(self,x):
         if isinstance(x[0], np.ndarray):
+            if isinstance(x[0][1], tuple):
+                x[:,1] = self.from_pose_to_idx(x[:,1])
             if np.max(x[:,1]) > len(self.n_clones):
                 raise 'Observation value above agent n_clones set capacity'
             x = np.array(x[:,1]).flatten().astype(np.int64)

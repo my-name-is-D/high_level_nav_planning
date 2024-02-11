@@ -3,14 +3,17 @@ import numpy as np
 import pickle
 from pathlib import Path
 import os 
+import sys
 import pandas as pd
 from datetime import datetime
 from envs.minigrid import GridWorldEnv
 from minigrid_navigation import minigrid_reach_goal, minigrid_exploration
 from ours.V3_3 import Ours_V3_3 
 from ours.V1 import Ours_V1
+from ours.V5 import Ours_V5
 from cscg.cscg import CHMM
 from visualisation_tools import generate_plot_report, generate_csv_report, save_transitions_plots
+import traceback
 
 parser = argparse.ArgumentParser(description='PyTorch Scalable Agent')
 parser.add_argument("--env",
@@ -95,111 +98,165 @@ def dump_object(model, model_name, save_name):
 
 def create_store_path(model_name, env_name):
     cwd = Path.cwd()
-    dp = cwd / 'results'/ env_name / model_name
+    if 'cscg' in model_name :
+        name = 'cscg'
+    else:
+        name = 'ours'
+    if 'goal' in model_name:
+        nav_type = name+ '_goal'
+    else:
+        nav_type = name +'_exploration/' + model_name
+    
+    dp = cwd / 'results'/ env_name / nav_type
+    # elif 'ours' in model_name and 'goal' in model_name:
+    #     dp = cwd / 'results'/ env_name / 'ours_goal' 
+    # else:
+    #     dp = cwd / 'results'/ env_name / model_name
     day = datetime.now().strftime("%Y-%m-%d")
     now = datetime.now().strftime("%H-%M-%S")
     save_name = str(model_name)+ '_' + str(day) + '-'+ str(now)
+    
     store_path = dp / save_name
+
     store_path.mkdir(exist_ok=True, parents=True)
     return store_path.resolve()
 
-def set_models(model_name:str, actions:dict, rooms:np.ndarray, \
-               obs_c_p:list, start_state:int):
+def set_models(model_name:str, possible_actions:dict, rooms:np.ndarray, \
+               obs_c_p:list, start_state:int, seed:int):
     if 'pose' in model_name:
         observation = obs_c_p
         n_emissions = rooms.shape[0] * rooms.shape[1]
+        ambiguity = False
     else:
         observation = [obs_c_p[0]]
         n_emissions = rooms.max() + 1
+        ambiguity = True
 
     if 'ours_v3' in model_name:
             model = Ours_V3_3(num_obs=2, \
                 num_states=2, observations=observation, \
-                    learning_rate_pB=3.0, actions= actions) #dim is still 2 set as default
+                    learning_rate_pB=3.0, actions= possible_actions) #dim is still 2 set as default
     elif 'ours_v1' in model_name:
             model = Ours_V1(num_obs=2, \
                 num_states=2, observations=[observation[0],start_state], \
-                learning_rate_pB=3.0, actions= actions)
+                learning_rate_pB=3.0, actions= possible_actions)
+    elif 'ours_v5' in model_name:
+            model = Ours_V5(num_obs=2, \
+                num_states=2, observations=observation, dim=1, \
+                learning_rate_pB=3.0, actions= possible_actions)
+            
     elif 'cscg' in model_name:
         n_clones = np.ones(n_emissions, dtype=np.int64) * 10
-        n_actions = max(list(actions.values()))
+        n_actions = max(list(possible_actions.values()))
         x = np.array([0])
         a = np.array([n_actions])
-        model = CHMM(n_clones=n_clones, pseudocount=0.002, \
-                       x=x, a=a, possible_actions=actions, seed=42, set_stationary_B=True) 
+        model = CHMM(n_clones=n_clones, pseudocount=0.05, \
+                       x=x, a=a, possible_actions=possible_actions, seed=seed, \
+                        set_stationary_B=True, ob_ambiguity = ambiguity) 
     else:
         raise ValueError(str(model_name) + ' is not a recognised model name')
     
     return model
 
 def main(flags):
-    
-    available_models = ['cscg_random_policy', 'cscg', 'ours_v3', 'ours_v1']
-    #SETUP ENVIRONMENT
-    env_name = flags.env
-    if 'grid' in env_name:
-        actions = {'LEFT':0, 'RIGHT':1, 'UP':2, 'DOWN':3, 'STAY':4}
-        env = GridWorldEnv(env_name, actions,\
-                        max_steps=flags.max_steps, goal=flags.goal)
-        perfect_B, desired_state_mapping = env.define_perfect_B()
-    
-        #adapt policy type (given or not)
-        if flags.load_policy != 'None':
-            policy, pose = load_a_policy(flags.load_policy)
-            flags.model+='_given_policy'
-        else:
-            policy= None
-            pose = tuple(flags.start_pose)
+        
+    available_models = ['cscg_random_policy', 'cscg', 'ours_v3', 'ours_v5']
+    data = {}
+    try:
+        #SETUP ENVIRONMENT
+        env_name = flags.env
+        if 'grid' in env_name:
+            possible_actions = {'LEFT':0, 'RIGHT':1, 'UP':2, 'DOWN':3, 'STAY':4}
+            env = GridWorldEnv(env_name, possible_actions,\
+                            max_steps=flags.max_steps, goal=flags.goal)
+            perfect_B, desired_state_mapping = env.define_perfect_B()
+        
+            #adapt policy type (given or not)
+            if flags.load_policy != 'None':
+                policy, pose = load_a_policy(flags.load_policy)
+                flags.model+='_given_policy'
+            else:
+                policy= None
+                pose = tuple(flags.start_pose)
 
-        obs_c_p,_ = env.reset(pose)
-        state = env.get_state(pose)
-        
-        #SET MODEL
-        if flags.load_model != 'None' :
-            print('Loading model from: ', flags.load_model)
-            model = load_object(flags.load_model)
-            model_path = flags.load_model.split('/')
-            model_name = next((item for item in model_path if any(model in item for model in available_models)), None)
-
-            #model_name = [substring for substring in available_models if substring == flags.load_model][0]
-        else:
-            print('Creating model: ', flags.model)
-            model = set_models(flags.model, actions, env.rooms, obs_c_p, state)
-            model_name = flags.model
-        print('model_name', model_name)
-
-        
-        
-        #SET NAVIGATION TYPE AND RUN NAVIGATION 
-        if flags.goal >= 0:
-            print('SEARCHING GOAL')
-            preferred_ob = [flags.goal, -1] # [c_ob, pose or state]
-            model.goal_oriented_navigation(preferred_ob)
-            data = minigrid_reach_goal(env, model, actions, model_name, pose, \
-                                    flags.max_steps, stop_condition = flags.stop_condition.lower())
-            model_name+='_goal_ob:'+str(flags.goal)
-            store_path = create_store_path(model_name, env_name)
-        
-        else:
-            print('STARTING EXPLO')
-            model.explo_oriented_navigation()
-            model, data = minigrid_exploration(env, model, actions, model_name, pose, \
-                                                flags.max_steps, stop_condition = flags.stop_condition.lower(), \
-                                                given_policy=policy)
-            store_path = create_store_path(model_name, env_name)
-            dump_object(model, model_name, store_path)
+            obs_c_p,_ = env.reset(pose)
+            state = env.get_state(pose)
             
-    else:
-        raise "Only implemented Minigrid testbench"
-    
+            #SET MODEL
+            if flags.load_model != 'None' :
+                print('Loading model from: ', flags.load_model)
+                model = load_object(flags.load_model)
+                model_path = flags.load_model.split('/')[::-1]
+                model_name = next((item for item in model_path if any(model in item for model in available_models)), None)
+                model.current_pose = None
+                model.agent.reset()
+                #model_name = [substring for substring in available_models if substring == flags.load_model][0]
+            else:
+                print('Creating model: ', flags.model)
+                flags.seed = np.random.randint(low=10000)
+                model = set_models(flags.model, possible_actions, env.rooms, obs_c_p, state, flags.seed)
+                model_name = flags.model
+            print('model_name', model_name)
+
+            #SAVING TERMINAL LOGS
+            if flags.goal >= 0:
+                model_name+='_goal_ob:'+str(flags.goal)
+            store_path = create_store_path(model_name, env_name)
+            
+            txt_file = str(store_path) + '/'+ str(flags.model) +"_SP:"+ str(flags.start_pose) +"_G:"+ str(flags.goal) +".txt"
+            print('Saving terminal prints in txt file:', txt_file)
+            txt_terminal_prints = open(txt_file, 'a+')
+            sys.stdout = txt_terminal_prints
+            
+            #SET NAVIGATION TYPE AND RUN NAVIGATION 
+            if flags.goal >= 0:
+                print('SEARCHING GOAL')
+                
+                output = env.get_short_term_goal()
+                if output != None:
+
+                    preferred_ob = [flags.goal, -1] # [c_ob, pose or state]
+                    model.goal_oriented_navigation(preferred_ob)
+                    data = minigrid_reach_goal(env, model, possible_actions, model_name, pose, \
+                                            flags.max_steps, stop_condition = flags.stop_condition.lower())
+                else:
+                    data = {
+                        "steps": 0,
+                        "c_obs": obs_c_p[0],
+                        "actions": -1,
+                        "poses": obs_c_p[1],
+                        'stop_condition_NO_GOAL_FOUND_IN_ENV': 0,
+                        "agent_info": {},
+                        "frames":[],
+                        "error": 'Goal_not_in_env',
+                    }      
+            else:
+                print('STARTING EXPLO')
+                store_path = create_store_path(model_name, env_name)
+                model.explo_oriented_navigation()
+                model, data = minigrid_exploration(env, model, possible_actions, model_name, pose, \
+                                                    flags.max_steps, stop_condition = flags.stop_condition.lower(), \
+                                                    given_policy=policy)
+                
+                dump_object(model, model_name, store_path)
+                
+        else:
+            raise "Only implemented Minigrid testbench"
+    except:
+        error_message = traceback.format_exc() 
+        print('ERROR MESSAGE:',error_message)
+
+
     print('Storing values at: ',store_path)
     
     generate_csv_report(data.copy(), flags, store_path)
     generate_plot_report(data, env, store_path)
-    save_transitions_plots(model, model_name, actions, desired_state_mapping, data, env.rooms_colour_map, store_path)
+    save_transitions_plots(model, model_name, possible_actions, desired_state_mapping, data, env.rooms_colour_map, store_path)
     
+    print('Experiment done')
     
-             
+    txt_terminal_prints.close()
+    
     
 
 if __name__ == "__main__":

@@ -290,6 +290,13 @@ class Agent(object):
         self.curr_timestep = 0
 
         if init_qs is None:
+            #ADDED BY D
+            self.action = None
+        
+            if hasattr(self, "qs_hist"):
+                self.qs_hist = []
+        
+
             if self.inference_algo == 'VANILLA':
                 self.qs = utils.obj_array_uniform(self.num_states)
             else: # in the case you're doing MMP (i.e. you have an inference_horizon > 1), we have to account for policy- and timestep-conditioned posterior beliefs
