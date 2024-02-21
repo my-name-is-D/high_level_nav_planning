@@ -122,13 +122,13 @@ class GridWorldEnv():
         action_key = list(filter(lambda x: self.possible_actions[x] == action, self.possible_actions))[0] 
 
         #it's probably: actions = {'UP':2, 'RIGHT':1, 'DOWN':3, 'LEFT':0, 'STAY':4} , but let's stay safe
-        if action_key == "LEFT" and 0 < col:
+        if action_key == "LEFT" and 0 < col and self.rooms[row][col-1] >= 0:
             col -= 1
-        elif action_key == "RIGHT" and col < self.rooms.shape[1] - 1:
+        elif action_key == "RIGHT" and col < self.rooms.shape[1] - 1 and self.rooms[row][col+1] >= 0:
             col += 1
-        elif action_key == "UP" and 0 < row:
+        elif action_key == "UP" and 0 < row and self.rooms[row-1][col] >= 0:
             row -= 1
-        elif action_key == "DOWN" and row < self.rooms.shape[0] - 1:
+        elif action_key == "DOWN" and row < self.rooms.shape[0] - 1 and self.rooms[row+1][col] >= 0:
             row += 1
 
         return (row,col)
@@ -139,10 +139,10 @@ class GridWorldEnv():
         for action_key, action in self.possible_actions.items():
             if (
             action_key == "STAY" or
-            (action_key == "LEFT" and col > 0) or
-            (action_key == "RIGHT" and col < self.rooms.shape[1] - 1) or
-            (action_key == "UP" and row > 0) or
-            (action_key == "DOWN" and row < self.rooms.shape[0] - 1)):
+            (action_key == "LEFT" and col > 0 and self.rooms[row][col-1] >= 0) or
+            (action_key == "RIGHT" and col < self.rooms.shape[1] - 1 and self.rooms[row][col+1] >= 0) or
+            (action_key == "UP" and row > 0 and self.rooms[row-1][col] >= 0) or
+            (action_key == "DOWN" and row < self.rooms.shape[0] - 1 and self.rooms[row+1][col] >= 0)):
                 step_possible_actions.append(action)
         if no_stay and 'STAY' in self.possible_actions.keys():
             step_possible_actions.remove(self.possible_actions['STAY'])
@@ -158,7 +158,8 @@ class GridWorldEnv():
     def define_perfect_B(self):
         """ The perfect B is defined as B[next_state, prev_state, action]"""
         #perfect B for this room config
-        desired_state_mapping = {(i * self.rooms.shape[1] + j): (i, j) for i in range(self.rooms.shape[0]) for j in range(self.rooms.shape[1])}
+        desired_state_mapping = {idx: coord for idx, coord in enumerate(((i, j) \
+                for i in range(self.rooms.shape[0]) for j in range(self.rooms.shape[1]) if self.rooms[i, j] != -1))}
         P = {}
         dim = self.rooms.shape
         for state_index, xy_coordinates in desired_state_mapping.items():
@@ -248,12 +249,45 @@ def setup_grid(room_choice:str = 'grid_3x3'):
             ]
         )
     
+    elif  room_choice == "grid_t_maze_alias": #T-maze with alias
+
+        rooms = np.array(
+            [
+                [0, 1, 2, 1, 0],
+                [-1, -1, 3, -1, -1],
+                [-1, -1, 3, -1, -1],
+                [-1, -1, 3, -1, -1],
+            ]
+        )
+
+    elif  room_choice == "grid_t_maze": #T-maze with alias - NO ALIAS
+
+        rooms = np.array(
+                [
+                    [0, 1, 2, 3, 7],
+                    [-1, -1, 4, -1, -1],
+                    [-1, -1, 5, -1, -1],
+                    [-1, -1, 6, -1, -1],
+                ]
+            )
+        
+    elif  room_choice == "grid_donut": #Squared all around - NO ALIAS
+
+        rooms = np.array(
+                [
+                    [0, 1, 2, 3, 4],
+                    [5, -1, -1, -1, 13],
+                    [6, -1, -1, -1, 12],
+                    [7, 8, 9, 10, 0],
+                ]
+            )
     else:
         raise ValueError("Room_choice "+ str(room_choice) +" is an invalid choice")
     
     custom_colors = (
         np.array(
             [
+                [255, 255, 255],#white
                 [255, 0, 0],#red
                 [0, 255, 0], #green
                 [50,50, 255], #bluish 
@@ -261,7 +295,7 @@ def setup_grid(room_choice:str = 'grid_3x3'):
                 [255, 255, 0], #yellow
                 [100, 100, 100], #grey
                 [115, 60, 60], #brown
-                [255, 255, 255], #white
+                [255, 0, 255], #flash pink
                 [80, 145,80], #kaki
                 [201,132,226], #pink
                 [75,182,220], #turquoise
