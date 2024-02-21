@@ -292,11 +292,10 @@ class Agent(object):
         if init_qs is None:
             #ADDED BY D
             self.action = None
-        
             if hasattr(self, "qs_hist"):
                 self.qs_hist = []
+            #----------
         
-
             if self.inference_algo == 'VANILLA':
                 self.qs = utils.obj_array_uniform(self.num_states)
             else: # in the case you're doing MMP (i.e. you have an inference_horizon > 1), we have to account for policy- and timestep-conditioned posterior beliefs
@@ -375,7 +374,7 @@ class Agent(object):
                 self.latest_belief = inference.average_states_over_policies(last_belief, self.q_pi) # average the earliest marginals together using posterior over policies (`self.q_pi`)
         else:
             self.latest_belief = last_belief
-
+    
         return self.latest_belief
     
     def get_future_qs(self):
@@ -393,7 +392,11 @@ class Agent(object):
             ``future_qs_seq[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
             at future timepoint ``t_idx``, relative to the current timestep.
         """
-        
+        #MODIFIED BY D:
+        #future_qs_seq[p_idx] = self.qs[p_idx][-(self.policy_len):]
+        #Instead of future_qs_seq[p_idx] = self.qs[p_idx][-(self.policy_len)+1:]
+        #With +1 then you get a timestep out of step compared to policy_length 
+        #when calculating param info of pB
         future_qs_seq = utils.obj_array(len(self.qs))
         for p_idx in range(len(self.qs)):
             future_qs_seq[p_idx] = self.qs[p_idx][-(self.policy_len+1):] # this grabs only the last `policy_len`+1 beliefs about hidden states, under each policy
@@ -535,7 +538,7 @@ class Agent(object):
         G: 1D ``numpy.ndarray``
             Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
         """
-
+        
         if self.inference_algo == "VANILLA":
             q_pi, G = control.update_posterior_policies(
                 self.qs,
@@ -552,9 +555,9 @@ class Agent(object):
                 gamma = self.gamma
             )
         elif self.inference_algo == "MMP":
-
+            
             future_qs_seq = self.get_future_qs()
-
+            
             q_pi, G = control.update_posterior_policies_full(
                 future_qs_seq,
                 self.A,

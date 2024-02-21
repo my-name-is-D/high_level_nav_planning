@@ -131,7 +131,7 @@ class Ours_V5():
       
         return self.agent_state_mapping
 
-    def get_current_belief(self):
+    def get_belief_over_states(self):
         return self.agent.qs
     
     def infer_pose(self, action):

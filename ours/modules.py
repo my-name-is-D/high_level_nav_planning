@@ -1,6 +1,7 @@
 import numpy as np
 import copy
-from ours.pymdp import maths, utils
+from ours.pymdp import maths, utils, inference, control
+from ours.pymdp.algos import run_mmp
 
 
 #==== pymdp modified methods ====#
@@ -191,6 +192,53 @@ def update_posterior_states(A, obs, prior=None, partial_ob=None, **kwargs):
     qs = run_partial_ob_vanilla_fpi(A, obs, num_obs, num_states, partial_ob, prior, **kwargs)
     return qs
 
+def update_posterior_states_full(
+    A,
+    B,
+    prev_obs,
+    policies,
+    prev_actions=None,
+    prior=None,
+    policy_sep_prior = True,
+    partial_ob = None,
+    **kwargs,
+):
+
+    num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A, B)
+    if partial_ob != None:
+        A = np.array(A[partial_ob])
+        num_obs = [num_obs[partial_ob]]
+        num_modalities = 1
+    
+    proc_obs_seq = utils.obj_array(len(prev_obs))
+    for t, obs_t in enumerate(prev_obs):
+        if len(obs_t) > 1 and partial_ob != None:
+            obs_t = obs_t[partial_ob]
+        proc_obs_seq[t] = utils.process_observation(obs_t, num_modalities, num_obs)
+    prev_obs = proc_obs_seq
+    
+    lh_seq = inference.get_joint_likelihood_seq(A, prev_obs, num_states)
+
+    if prev_actions is not None:
+        prev_actions = np.stack(prev_actions,0)
+
+    qs_seq_pi = utils.obj_array(len(policies))
+    F = np.zeros(len(policies)) # variational free energy of policies
+
+    for p_idx, policy in enumerate(policies):
+        # print('lh_seq:', len(lh_seq), policy.shape, prior.shape)
+        # get sequence and the free energy for policy
+        qs_seq_pi[p_idx], F[p_idx] = run_mmp(
+            lh_seq,
+            B,
+            policy,
+            prev_actions=prev_actions,
+            prior= prior[p_idx] if policy_sep_prior else prior, 
+            **kwargs
+        )
+    # print('qs_seq_pi', qs_seq_pi[0].shape)
+    return qs_seq_pi, F
+
 def update_state_likelihood_dirichlet(
     pB, B, actions, qs, qs_prev, lr=1.0, factors="all"
 ):
@@ -240,6 +288,126 @@ def update_state_likelihood_dirichlet(
         qB[factor][:,:,int(actions[factor])] += (lr*dfdb)
 
     return qB
+
+
+def update_posterior_policies_full(
+    qs_seq_pi,
+    A,
+    B,
+    C,
+    policies,
+    use_utility=True,
+    use_states_info_gain=True,
+    use_param_info_gain=False,
+    prior=None,
+    pA=None,
+    pB=None,
+    F = None,
+    E = None,
+    gamma=16.0
+):  
+    """
+    Update posterior beliefs about policies by computing expected free energy of each policy and integrating that
+    with the variational free energy of policies ``F`` and prior over policies ``E``. This is intended to be used in conjunction
+    with the ``update_posterior_states_full`` method of ``inference.py``, since the full posterior over future timesteps, under all policies, is
+    assumed to be provided in the input array ``qs_seq_pi``.
+
+    Parameters
+    ----------
+    qs_seq_pi: ``numpy.ndarray`` of dtype object
+        Posterior beliefs over hidden states for each policy. Nesting structure is policies, timepoints, factors,
+        where e.g. ``qs_seq_pi[p][t][f]`` stores the marginal belief about factor ``f`` at timepoint ``t`` under policy ``p``.
+    A: ``numpy.ndarray`` of dtype object
+        Sensory likelihood mapping or 'observation model', mapping from hidden states to observations. Each element ``A[m]`` of
+        stores an ``numpy.ndarray`` multidimensional array for observation modality ``m``, whose entries ``A[m][i, j, k, ...]`` store 
+        the probability of observation level ``i`` given hidden state levels ``j, k, ...``
+    B: ``numpy.ndarray`` of dtype object
+        Dynamics likelihood mapping or 'transition model', mapping from hidden states at ``t`` to hidden states at ``t+1``, given some control state ``u``.
+        Each element ``B[f]`` of this object array stores a 3-D tensor for hidden state factor ``f``, whose entries ``B[f][s, v, u]`` store the probability
+        of hidden state level ``s`` at the current time, given hidden state level ``v`` and action ``u`` at the previous time.
+    C: ``numpy.ndarray`` of dtype object
+       Prior over observations or 'prior preferences', storing the "value" of each outcome in terms of relative log probabilities. 
+       This is softmaxed to form a proper probability distribution before being used to compute the expected utility term of the expected free energy.
+    policies: ``list`` of 2D ``numpy.ndarray``
+        ``list`` that stores each policy in ``policies[p_idx]``. Shape of ``policies[p_idx]`` is ``(num_timesteps, num_factors)`` where `num_timesteps` is the temporal
+        depth of the policy and ``num_factors`` is the number of control factors.
+    use_utility: ``Bool``, default ``True``
+        Boolean flag that determines whether expected utility should be incorporated into computation of EFE.
+    use_states_info_gain: ``Bool``, default ``True``
+        Boolean flag that determines whether state epistemic value (info gain about hidden states) should be incorporated into computation of EFE.
+    use_param_info_gain: ``Bool``, default ``False`` 
+        Boolean flag that determines whether parameter epistemic value (info gain about generative model parameters) should be incorporated into computation of EFE. 
+    prior: ``numpy.ndarray`` of dtype object, default ``None``
+        If provided, this is a ``numpy`` object array with one sub-array per hidden state factor, that stores the prior beliefs about initial states. 
+        If ``None``, this defaults to a flat (uninformative) prior over hidden states.
+    pA: ``numpy.ndarray`` of dtype object, default ``None``
+        Dirichlet parameters over observation model (same shape as ``A``)
+    pB: ``numpy.ndarray`` of dtype object, default ``None``
+        Dirichlet parameters over transition model (same shape as ``B``)
+    F: 1D ``numpy.ndarray``, default ``None``
+        Vector of variational free energies for each policy
+    E: 1D ``numpy.ndarray``, default ``None``
+        Vector of prior probabilities of each policy (what's referred to in the active inference literature as "habits"). If ``None``, this defaults to a flat (uninformative) prior over policies.
+    gamma: ``float``, default 16.0
+        Prior precision over policies, scales the contribution of the expected free energy to the posterior over policies
+
+    Returns
+    ----------
+    q_pi: 1D ``numpy.ndarray``
+        Posterior beliefs over policies, i.e. a vector containing one posterior probability per policy.
+    G: 1D ``numpy.ndarray``
+        Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
+    """
+
+    num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A, B)
+    
+    num_policies = len(policies)
+
+   
+
+    # horizon = len(qs_seq_pi[0])
+    # num_policies = len(qs_seq_pi)
+    # qo_seq = utils.obj_array(horizon)
+    # for t in range(horizon):
+    #     qo_seq[t] = utils.obj_array_zeros(num_obs)
+
+    # initialise expected observations
+    qo_seq_pi = utils.obj_array(num_policies)
+
+    # initialize (negative) expected free energies for all policies
+    G = np.zeros(num_policies)
+
+    if F is None:
+        F =  maths.spm_log_single(np.ones(num_policies) / num_policies)
+
+    if E is None:
+        lnE =  maths.spm_log_single(np.ones(num_policies) / num_policies)
+    else:
+        lnE = maths.spm_log_single(E) 
+
+
+    for p_idx, policy in enumerate(policies):
+        qs_pi = control.get_expected_states(qs_seq_pi, B, policy)
+        qo_seq_pi[p_idx] = control.get_expected_obs(qs_pi, A)
+        # str_p = from_int_to_str(policy)
+        # print('infer_policies:policy', str_p, 'expected_obs', qo_seq_pi[p_idx] )
+        if use_utility:
+            # print('utility', control.calc_expected_utility(qo_seq_pi[p_idx], C))
+            G[p_idx] += control.calc_expected_utility(qo_seq_pi[p_idx], C)
+        
+        if use_states_info_gain:
+            G[p_idx] += control.calc_states_info_gain(A, qs_pi)
+        
+        if use_param_info_gain:
+            if pA is not None:
+                G[p_idx] += control.calc_pA_info_gain(pA, qo_seq_pi[p_idx], qs_pi)
+            if pB is not None:
+                #print(pB[0].shape, len(qs_seq_pi[p_idx]), prior[0].shape, policy)
+                G[p_idx] += control.calc_pB_info_gain(pB, qs_pi, qs_seq_pi, policy)
+
+    q_pi = maths.softmax(G * gamma - F + lnE)
+    
+    return q_pi, G
 
 #==== Update A and B ====#
 def create_B_matrix(num_states:int, num_actions:int)->np.ndarray:

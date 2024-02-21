@@ -38,7 +38,7 @@ class Ours_V1():
         self.update_agent_state_mapping(ob, 0)
         return self.agent
     
-    def get_current_belief(self):
+    def get_belief_over_states(self):
         return self.agent.qs
     
     def update_agent_state_mapping(self, ob:int, state_belief:list=None)-> dict:

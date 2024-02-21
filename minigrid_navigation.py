@@ -4,7 +4,7 @@ import traceback
 import copy
 import gc
 
-def minigrid_exploration(env, model, possible_actions, model_name, pose, max_steps, stop_condition = None, given_policy=None):
+def minigrid_exploration(env, model, model_name, pose, max_steps, stop_condition = None, given_policy=None):
     """ 
     
     """
@@ -40,6 +40,7 @@ def minigrid_exploration(env, model, possible_actions, model_name, pose, max_ste
             if given_policy is None:
                 if 'ours' in model_name :
                     action, agent_info = ours_action_decision(model, next_possible_actions=next_possible_actions)
+                    ours_infer_position(model, observation, action, next_possible_actions)
                 elif 'cscg' in model_name:
                     if 'random' in model_name:
                         random_policy = True
@@ -48,7 +49,14 @@ def minigrid_exploration(env, model, possible_actions, model_name, pose, max_ste
                     #NOTE: Both can be given interchangably, the diff is in the Transition matrix as giving only possible motions
                     # means it will never experiment walls impact on states.
                     motions = env.get_possible_motions() #next_possible_actions 
-                    action, agent_info = cscg_action_decision(model, observation,motions , random_policy)
+                    if init_model != []:
+                        action, agent_info = cscg_action_decision(init_model, observation,motions , random_policy)
+                        model.agent_state_mapping = init_model.get_agent_state_mapping()
+                        model.pose_mapping = init_model.get_pose_mapping()
+                    else:
+                        action, agent_info = cscg_action_decision(model, observation,motions , random_policy)
+
+                   
             else:
                 action = given_policy[t]
                 agent_info = update_model_given_action(model, action, pose)
@@ -56,7 +64,7 @@ def minigrid_exploration(env, model, possible_actions, model_name, pose, max_ste
             obs, _,_,_ = env.step(action, pose)
             ob, pose = obs
             
-            next_possible_actions = env.get_next_possible_motions(pose, no_stay = True)
+            next_possible_actions = env.get_next_possible_motions(pose, no_stay = False)
             if 'pose' in model_name:
                 # if pose not in model.pose_mapping: #this is just a security check
                 #     model.pose_mapping.append(pose)
@@ -74,6 +82,9 @@ def minigrid_exploration(env, model, possible_actions, model_name, pose, max_ste
                 if t % 5 == 0:
                     if 'pose' in model_name:
                         observations = np.array([np.array([c, p], dtype=object) for c, p in zip(c_obs[:len(actions)], p_obs[:len(actions)])])
+                    else:
+                        observations = c_obs
+                        
                     del init_model
                     gc.collect()
                     init_model = copy.deepcopy(model)
@@ -82,7 +93,7 @@ def minigrid_exploration(env, model, possible_actions, model_name, pose, max_ste
                     data['train_progression'] = train_progression
                     if isinstance(observations[0], np.ndarray) or isinstance(observations[0], tuple):
                         observations[:,1] = init_model.from_pose_to_idx(observations[:,1])
-                        asm = init_model.get_agent_state_mapping(observations,actions,p_obs[:len(actions)])
+                    init_model.get_agent_state_mapping(observations,actions,p_obs[:len(actions)])
                     
             #Save data
             frames.append(get_frame(env, pose))
@@ -159,10 +170,12 @@ def minigrid_reach_goal(env, model, actions_dict, model_name, pose, max_steps, s
         try:
             if 'ours' in model_name :
                 action, agent_info = ours_action_decision(model, observation, next_possible_actions)
+                ours_infer_position(model, observation, action, next_possible_actions)
             if 'cscg' in model_name:
                 action, agent_info = cscg_action_decision(model, observation, next_possible_actions)
                 
             obs, _,_,_ = env.step(action, pose)
+            print('action', action, 'colour', obs[0], 'pose', obs[1])
             ob, pose = obs
             next_possible_actions = env.get_next_possible_motions(pose, no_stay = False)
             
@@ -234,7 +247,6 @@ def state_explo_reached(model, perfect_B, desired_n_state):
     current_n_zero_mask = A >0
     return len(v) == desired_n_state and np.array_equal(non_zero_mask,current_n_zero_mask)
            
-
 def agent_B_match_ideal_B_v2(agent_state_mapping, agent_B, perfect_B, desired_state_mapping, actions, tolerance_margin = 0.3):
     """Check if the values == 1 in perfect_B are filled with values relatively close at tolerance level"""
     
@@ -270,7 +282,7 @@ def update_model_given_action(model:object, action:int, pose:tuple):
     model.agent.step_time()
     if pose not in model.pose_mapping:
         model.pose_mapping.append(pose)
-    return {'qs': model.get_current_belief()[0], "bayesian_surprise":0}
+    return {'qs': model.get_belief_over_states()[0], "bayesian_surprise":0}
 
 def define_perfect_cscg(env, model, actions, start_pose):
     """ We have a perfect Transition matrix between the correct number of states"""
@@ -297,6 +309,7 @@ def goal_reached(model, action , c_obs, p_obs, actions):
         preferred_ob = c_obs[-1]
     else:
         preferred_ob = model.preferred_ob[0]
+
     if (c_obs[-1] == preferred_ob and action == actions['STAY']) :
         print('Goal reached')
         return 1
@@ -316,7 +329,7 @@ def cscg_action_decision(cscg, observation, next_possible_actions, random_policy
                             
     return action, agent_info
         
-def ours_action_decision(ours, observation=None, next_possible_actions=None):
+def ours_action_decision(ours, observation:list=None, next_possible_actions:list=None):
     """ 
     Our model infer an action between all actions and update its believes 
     according to how he moved and where it can move at the next step.
@@ -324,6 +337,11 @@ def ours_action_decision(ours, observation=None, next_possible_actions=None):
     action, agent_info = ours.infer_action(observation=observation, next_possible_actions=next_possible_actions)
     return action, agent_info
 
+def ours_infer_position(ours, observation:list, action:int, next_possible_actions:list):
+    ours.initialise_current_pose(observation)
+    ours.infer_pose(action,next_possible_actions)
+
 def ours_update_agent(ours, action, observations, next_possible_actions):
+    
     ours.agent_step_update(action,observations,next_possible_actions)
 

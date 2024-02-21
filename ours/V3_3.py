@@ -68,6 +68,17 @@ class Ours_V3_3():
         self.update_agent_state_mapping(self.current_pose, observations, 0)
         return self.agent
     
+    def reset(self, init_qs:np.ndarray=None, start_pose:tuple=None):
+    
+        self.agent.curr_timestep = 0
+        self.agent.action = None
+        self.agent.prev_actions = None
+        self.agent.prev_obs = []
+        self.qs_step = 0
+        self.current_pose = start_pose
+
+        self.agent.reset(init_qs)
+
     def update_preference(self, obs:list):
         """given a list of observations we fill C with thos as preference. 
         If we have a partial preference over several observations, 
@@ -137,22 +148,21 @@ class Ours_V3_3():
       
         return self.agent_state_mapping
 
-    def get_current_belief(self):
+    def get_belief_over_states(self):
         return self.agent.qs
     
-    def infer_pose(self, action):
-        if action in self.step_possible_actions:
+    def infer_pose(self, action, next_possible_actions):
+        if action in next_possible_actions and self.current_pose !=None:
            self.current_pose = next_p_given_a(self.current_pose, self.possible_actions, action) 
         return self.current_pose
 
     def infer_action(self, **kwargs):
         observations = kwargs.get('observation', None)
-        self.step_possible_actions = kwargs.get('next_possible_actions', list(self.possible_actions.values()))
-        qs_hist = self.agent.qs_hist[-2:]
+        next_possible_actions = kwargs.get('next_possible_actions', list(self.possible_actions.values()))
+        # qs_hist = self.agent.qs_hist[-2:]
         #prior = np.pad(qs_hist[-2][0], (0, max(len(qs_hist[-2][0]), len(qs_hist[-1][0])) - len(qs_hist[-2][0])), mode='constant')
         prior = self.agent.qs[0].copy()
-        # print(self.agent.A[1].round(3))
-        # print(self.pose_mapping)
+
         if observations is not None:
             #NB: Only give obs if state not been inferred before 
             #(meaning if no step update)
@@ -239,7 +249,13 @@ class Ours_V3_3():
             #increase B dim
             B = update_B_matrix_size(B, add= add_dim)
             self.agent.pB = update_B_matrix_size(self.agent.pB, add= add_dim, alter_weights=False)
-            self.agent.qs[0] = np.append(self.agent.qs[0],[0]*add_dim)
+            if len(self.agent.qs) > 1:
+                for seq in self.agent.qs:
+                    for subseq in seq:
+                        subseq[0] = np.append(subseq[0], [0] * add_dim)
+            else:
+            
+                self.agent.qs[0] = np.append(self.agent.qs[0],[0]*add_dim)
         
         self.agent.num_states = [B[0].shape[0]]
         self.agent.B = B
@@ -293,7 +309,7 @@ class Ours_V3_3():
         #UPDATE B
         if len(self.agent.qs_hist)+1 > 1:#secutity check
             if len(self.agent.qs_hist[-1][0]) < len(Qs[0]):
-                self.agent.qs_hist[-1][0] = np.append(self.agent.qs_hist[-1][0],[0]*(len(self.agent.qs_hist[-1][0])-len(Qs[0])))
+                self.agent.qs_hist[-1][0] = np.append(self.agent.qs_hist[-1][0],[0]*(len(Qs[0])- len(self.agent.qs_hist[-1][0])))
             self.update_B(Qs, self.agent.qs_hist[-1], action, lr_pB = 10) 
             #2 WAYS TRANSITION UPDATE (only if T to diff state)
             if np.argmax(self.agent.qs_hist[-1][0]) != np.argmax(Qs[0]):
@@ -435,8 +451,7 @@ class Ours_V3_3():
         ob = observations[0]
         if len(observations) > 1:
             self.current_pose = observations[1]
-        else:
-            self.current_pose = self.infer_pose(action)
+    
         pose = self.current_pose
 
         if pose not in self.pose_mapping:

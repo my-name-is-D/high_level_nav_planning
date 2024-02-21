@@ -11,6 +11,7 @@ from minigrid_navigation import minigrid_reach_goal, minigrid_exploration
 from ours.V3_3 import Ours_V3_3 
 from ours.V1 import Ours_V1
 from ours.V5 import Ours_V5
+from ours.V4 import Ours_V4
 from cscg.cscg import CHMM
 from visualisation_tools import generate_plot_report, generate_csv_report, save_transitions_plots
 import traceback
@@ -58,6 +59,12 @@ parser.add_argument('--load_policy',
     help="path to a csv file containing a policy",
     default = 'None')
 
+parser.add_argument('--inf_algo',
+    type=str,
+    help="Inference algo Vanilla or MMP",
+    default = 'VANILLA')
+
+
 def find_directory(directory_name):
     start_dir = Path.cwd() / 'results'
     for root, dirs, files in os.walk(start_dir):
@@ -103,7 +110,8 @@ def create_store_path(model_name, env_name):
     else:
         name = 'ours'
     if 'goal' in model_name:
-        nav_type = name+ '_goal'
+        model_name_prefix = model_name.split('_goal_ob')
+        nav_type = name+ '_goal/' + model_name_prefix[0]
     else:
         nav_type = name +'_exploration/' + model_name
     
@@ -121,8 +129,11 @@ def create_store_path(model_name, env_name):
     store_path.mkdir(exist_ok=True, parents=True)
     return store_path.resolve()
 
-def set_models(model_name:str, possible_actions:dict, rooms:np.ndarray, \
-               obs_c_p:list, start_state:int, seed:int):
+def set_models(possible_actions:dict, rooms:np.ndarray, \
+               obs_c_p:list, start_state:int, flags):
+    
+    model_name = flags.model
+
     if 'pose' in model_name:
         observation = obs_c_p
         n_emissions = rooms.shape[0] * rooms.shape[1]
@@ -136,14 +147,19 @@ def set_models(model_name:str, possible_actions:dict, rooms:np.ndarray, \
             model = Ours_V3_3(num_obs=2, \
                 num_states=2, observations=observation, \
                     learning_rate_pB=3.0, actions= possible_actions) #dim is still 2 set as default
+    if 'ours_v4' in model_name:
+            model = Ours_V4(num_obs=2, \
+                num_states=2, observations=observation, \
+                    learning_rate_pB=3.0, actions= possible_actions, inference_algo = flags.inf_algo)
+            
     elif 'ours_v1' in model_name:
             model = Ours_V1(num_obs=2, \
                 num_states=2, observations=[observation[0],start_state], \
                 learning_rate_pB=3.0, actions= possible_actions)
-    elif 'ours_v5' in model_name:
-            model = Ours_V5(num_obs=2, \
-                num_states=2, observations=observation, dim=1, \
-                learning_rate_pB=3.0, actions= possible_actions)
+    # elif 'ours_v5' in model_name:
+    #         model = Ours_V5(num_obs=2, \
+    #             num_states=2, observations=observation, dim=1, \
+    #             learning_rate_pB=3.0, actions= possible_actions)
             
     elif 'cscg' in model_name:
         n_clones = np.ones(n_emissions, dtype=np.int64) * 10
@@ -151,7 +167,7 @@ def set_models(model_name:str, possible_actions:dict, rooms:np.ndarray, \
         x = np.array([0])
         a = np.array([n_actions])
         model = CHMM(n_clones=n_clones, pseudocount=0.05, \
-                       x=x, a=a, possible_actions=possible_actions, seed=seed, \
+                       x=x, a=a, possible_actions=possible_actions, seed=flags.seed, \
                         set_stationary_B=True, ob_ambiguity = ambiguity) 
     else:
         raise ValueError(str(model_name) + ' is not a recognised model name')
@@ -160,7 +176,7 @@ def set_models(model_name:str, possible_actions:dict, rooms:np.ndarray, \
 
 def main(flags):
         
-    available_models = ['cscg_random_policy', 'cscg', 'ours_v3', 'ours_v5']
+    available_models = ['cscg_random_policy', 'cscg', 'ours_v3', 'ours_v5', 'ours_v4']
     data = {}
     try:
         #SETUP ENVIRONMENT
@@ -190,14 +206,24 @@ def main(flags):
                 model_name = next((item for item in model_path if any(model in item for model in available_models)), None)
                 model.current_pose = None
                 model.agent.reset()
+                                
                 #model_name = [substring for substring in available_models if substring == flags.load_model][0]
             else:
                 print('Creating model: ', flags.model)
                 flags.seed = np.random.randint(low=10000)
-                model = set_models(flags.model, possible_actions, env.rooms, obs_c_p, state, flags.seed)
+                model = set_models(possible_actions, env.rooms, obs_c_p, state, flags)
                 model_name = flags.model
-            print('model_name', model_name)
+                if 'ours_v4' in model_name:
+                    model_name+= '_'+ flags.inf_algo
 
+            print('model_name', model_name)
+            
+            ob = env.get_ob_given_p(pose)
+            if ob == -1:
+                print('Terminating experiment, we are starting in a wall')
+                if 'txt_terminal_prints' in locals():
+                    txt_terminal_prints.close()
+                return
             #SAVING TERMINAL LOGS
             if flags.goal >= 0:
                 model_name+='_goal_ob:'+str(flags.goal)
@@ -212,11 +238,16 @@ def main(flags):
             if flags.goal >= 0:
                 print('SEARCHING GOAL')
                 
+                    
+                
                 output = env.get_short_term_goal()
+                print('goal_ob', env.goal_ob, output[2])
                 if output != None:
 
                     preferred_ob = [flags.goal, -1] # [c_ob, pose or state]
                     model.goal_oriented_navigation(preferred_ob)
+                    if 'ours' in model_name:
+                        model.reset()
                     data = minigrid_reach_goal(env, model, possible_actions, model_name, pose, \
                                             flags.max_steps, stop_condition = flags.stop_condition.lower())
                 else:
@@ -234,8 +265,8 @@ def main(flags):
                 print('STARTING EXPLO')
                 store_path = create_store_path(model_name, env_name)
                 model.explo_oriented_navigation()
-                model, data = minigrid_exploration(env, model, possible_actions, model_name, pose, \
-                                                    flags.max_steps, stop_condition = flags.stop_condition.lower(), \
+                model, data = minigrid_exploration(env, model, model_name, pose, flags.max_steps, \
+                                                     stop_condition = flags.stop_condition.lower(), \
                                                     given_policy=policy)
                 
                 dump_object(model, model_name, store_path)

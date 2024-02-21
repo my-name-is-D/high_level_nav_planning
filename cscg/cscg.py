@@ -145,7 +145,7 @@ class CHMM(object):
         self.ob_ambiguity = ob_ambiguity
         self.current_pose = (0,0)
 
-    def get_current_belief(self):
+    def get_belief_over_states(self):
         return self.agent.qs
     
     def infer_pose(self, action, next_possible_actions):
