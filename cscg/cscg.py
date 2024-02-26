@@ -188,6 +188,7 @@ class CHMM(object):
 
         if len(obs) > 1:
             state_ob = self.update_agent_state_mapping(obs[1], obs[0])
+            print('state_ob', state_ob, 'for obs', obs)
             obs = [state_ob] 
             #Pose is an unambigious ob, since we give an int to cscg, still
             #for future changes in method. let's keep separated.
@@ -410,7 +411,7 @@ class CHMM(object):
         """ Do nothing, wait for full motion?"""
         return
     
-    def goal_oriented_navigation(self, obs):
+    def goal_oriented_navigation(self, obs, **kwargs):
         if -1 in obs:
             obs.remove(-1)
 
@@ -441,12 +442,14 @@ class CHMM(object):
         if isinstance(obs, list):
             C = self.agent._construct_C_prior()
             A = self.get_A(reduce=False)[0]
-            preferred_ob = []
             
+            preferred_ob = []
             #Only 1 modality, but several goal obs possible
             for id, ob in enumerate(obs):
                 if ob >= 0:
-                    self.preferred_ob = [ob]
+                    if len(self.preferred_ob) == 1 and self.preferred_ob[0] == -1:
+                        self.preferred_ob = []
+                    self.preferred_ob.append(ob)
                     self.preferred_states += list(A[ob, :].nonzero()[0])
                     ob_processed = utils.process_observation(ob, 1, [self.agent.num_obs[0]])
                     ob = utils.to_obj_array(ob_processed)

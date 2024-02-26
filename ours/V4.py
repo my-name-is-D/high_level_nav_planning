@@ -150,8 +150,9 @@ class Ours_V4():
         self.agent.use_states_info_gain = True #Should we
         self.agent.use_utility = False
 
-    def goal_oriented_navigation(self, obs=None):
-        self.switch_inference_algo("MMP")
+    def goal_oriented_navigation(self, obs=None, **kwargs):
+        inf_algo = kwargs.get('inf_algo', 'MMP')
+        self.switch_inference_algo(inf_algo)
         self.update_preference(obs)
         self.agent.use_param_info_gain = False
         self.agent.use_states_info_gain = False #This make it FULLY Goal oriented

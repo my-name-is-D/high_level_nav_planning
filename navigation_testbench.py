@@ -194,8 +194,15 @@ def main(flags):
             else:
                 policy= None
                 pose = tuple(flags.start_pose)
-
-            obs_c_p,_ = env.reset(pose)
+            try:
+                obs_c_p,_ = env.reset(pose)
+                if obs_c_p[0] == -1:
+                    print('Terminating experiment, we are starting in a wall')
+                    return
+            except IndexError: #We gave a starting pose that is not in env
+                print('Terminating experiment, we are starting outside the env range')
+                return 
+            
             state = env.get_state(pose)
             
             #SET MODEL
@@ -218,12 +225,7 @@ def main(flags):
 
             print('model_name', model_name)
             
-            ob = env.get_ob_given_p(pose)
-            if ob == -1:
-                print('Terminating experiment, we are starting in a wall')
-                if 'txt_terminal_prints' in locals():
-                    txt_terminal_prints.close()
-                return
+                            
             #SAVING TERMINAL LOGS
             if flags.goal >= 0:
                 model_name+='_goal_ob:'+str(flags.goal)
@@ -237,16 +239,14 @@ def main(flags):
             #SET NAVIGATION TYPE AND RUN NAVIGATION 
             if flags.goal >= 0:
                 print('SEARCHING GOAL')
-                
-                    
-                
+                                
                 output = env.get_short_term_goal()
                 print('goal_ob', env.goal_ob, output[2])
                 if output != None:
 
                     preferred_ob = [flags.goal, -1] # [c_ob, pose or state]
-                    model.goal_oriented_navigation(preferred_ob)
-                    if 'ours' in model_name:
+                    model.goal_oriented_navigation(preferred_ob, inf_algo=flags.inf_algo)
+                    if 'ours' in model_name and flags.load_model != 'None':
                         model.reset()
                     data = minigrid_reach_goal(env, model, possible_actions, model_name, pose, \
                                             flags.max_steps, stop_condition = flags.stop_condition.lower())

@@ -112,7 +112,7 @@ class Ours_V3_3():
             self.preferred_ob = [-1,-1]
             self.agent.C = self.agent._construct_C_prior()
 
-    def goal_oriented_navigation(self, obs=None):
+    def goal_oriented_navigation(self, obs=None, **kwargs):
         self.update_preference(obs)
         self.agent.use_param_info_gain = False
         self.agent.use_states_info_gain = False #This make it FULLY Goal oriented
@@ -180,7 +180,7 @@ class Ours_V3_3():
                 qs = self.infer_states(observations, distr_obs=False)
             else:
                 qs = self.infer_states(observations, distr_obs=False)
-        print('infer action: self.current_pose', self.current_pose, hypo_qs[0].round(3))
+        #print('infer action: self.current_pose', self.current_pose, hypo_qs[0].round(3))
         q_pi, efe = self.agent.infer_policies()
         action = self.agent.sample_action()
         
