@@ -12,6 +12,7 @@ from ours.V3_3 import Ours_V3_3
 from ours.V1 import Ours_V1
 from ours.V5 import Ours_V5
 from ours.V4 import Ours_V4
+from ours.V4_2 import Ours_V4_2
 from cscg.cscg import CHMM
 from visualisation_tools import generate_plot_report, generate_csv_report, save_transitions_plots
 import traceback
@@ -147,10 +148,15 @@ def set_models(possible_actions:dict, rooms:np.ndarray, \
             model = Ours_V3_3(num_obs=2, \
                 num_states=2, observations=observation, \
                     learning_rate_pB=3.0, actions= possible_actions) #dim is still 2 set as default
-    if 'ours_v4' in model_name:
+    elif 'ours_v4_2' in model_name:
+            model = Ours_V4_2(num_obs=2, \
+                num_states=2, observations=observation, \
+                    learning_rate_pB=3.0, actions= possible_actions, inference_algo = flags.inf_algo)
+    elif 'ours_v4' in model_name:
             model = Ours_V4(num_obs=2, \
                 num_states=2, observations=observation, \
                     learning_rate_pB=3.0, actions= possible_actions, inference_algo = flags.inf_algo)
+    
             
     elif 'ours_v1' in model_name:
             model = Ours_V1(num_obs=2, \
@@ -212,7 +218,10 @@ def main(flags):
                 model_path = flags.load_model.split('/')[::-1]
                 model_name = next((item for item in model_path if any(model in item for model in available_models)), None)
                 model.current_pose = None
-                model.agent.reset()
+                if hasattr(model, 'agent'):
+                    model.agent.reset()
+                else:
+                    model.reset()
                                 
                 #model_name = [substring for substring in available_models if substring == flags.load_model][0]
             else:
@@ -264,7 +273,7 @@ def main(flags):
             else:
                 print('STARTING EXPLO')
                 store_path = create_store_path(model_name, env_name)
-                model.explo_oriented_navigation()
+                model.explo_oriented_navigation(inference_algo=flags.inf_algo)
                 model, data = minigrid_exploration(env, model, model_name, pose, flags.max_steps, \
                                                      stop_condition = flags.stop_condition.lower(), \
                                                     given_policy=policy)

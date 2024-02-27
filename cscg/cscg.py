@@ -431,7 +431,7 @@ class CHMM(object):
         print('received obs', test_obs, 'modified obs', obs)
         self.update_preference(obs) 
     
-    def explo_oriented_navigation(self):
+    def explo_oriented_navigation(self, **kwargs):
         self.update_preference()
 
     def update_preference(self, obs:list=None):

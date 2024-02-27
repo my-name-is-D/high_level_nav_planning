@@ -289,7 +289,6 @@ def update_state_likelihood_dirichlet(
 
     return qB
 
-
 def update_posterior_policies_full(
     qs_seq_pi,
     A,
@@ -410,6 +409,11 @@ def update_posterior_policies_full(
     return q_pi, G
 
 #==== Update A and B ====#
+
+def set_stationary(mat, idx=-1):
+    mat[:,:,idx] = np.eye(mat.shape[0])
+    return mat
+
 def create_B_matrix(num_states:int, num_actions:int)->np.ndarray:
     """ 
     generate a Transmition matrix B of shape 
@@ -476,3 +480,126 @@ def update_A_matrix_size(A, add_ob=0, add_state=0, null_proba = True):
     new_A[slices] = A
     A = new_A
     return A
+
+
+#==== POLICY GENERATION ====#
+def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0))-> list:
+    ''' Given current pose, and the goals poses
+    we want to explore or reach those goals, 
+    generate policies going around in a square perimeter. 
+    Either just forward (goals), or all around (explore)'''
+
+    goal_poses = define_policies_objectives(current_pose, lookahead)
+    policies_lists = []
+    #get all the actions leading to the endpoints
+    for endpoint in goal_poses:
+        action_seq_options = define_policies_to_goal(current_pose, endpoint, actions, lookahead)
+        policies_lists.extend(action_seq_options)
+
+    if 'STAY' in actions:
+        policies_lists.append(np.array([[actions['STAY']]]*lookahead))
+
+    policies_lists = remove_repetitions(policies_lists)
+    return policies_lists
+
+def remove_repetitions(policies):
+    unique_policies = {tuple(arr.ravel()) for arr in policies}
+    # Convert the set back to a list of arrays
+    unique_policies = [np.array(policy).reshape(-1, 1) for policy in unique_policies]
+    return unique_policies
+
+def define_policies_objectives(current_pose:list, lookahead:int) ->list:
+    """ 
+    Full 2D exploration around the agent. 
+    All corners of square (dist to agent:lookahead) perimeters around agent set as goal
+    """
+    goal_poses = []
+
+    goal_poses.append([current_pose[0]+lookahead,  current_pose[1]-lookahead])
+    goal_poses.append([current_pose[0]+lookahead,  current_pose[1]+lookahead])
+    goal_poses.append([current_pose[0]-lookahead,  current_pose[1]-lookahead])
+    goal_poses.append([current_pose[0]-lookahead,  current_pose[1]+lookahead])
+    
+    return goal_poses
+
+def define_policies_to_goal(start_pose:list, end_pose:list, actions:dict, lookahead:int)->list:
+    '''
+    Given the current pose and goal pose establish all the sequence of actions 
+    leading TOWARD the objective. 
+    This code is valid without considering obstacles. If there are, consider
+    expanding the area of possible paths.
+    '''
+    dx,dy = abs(int(start_pose[0] - end_pose[0])), abs(int(start_pose[1] - end_pose[1])) # destination cell
+
+    #If we want to explore, we want a grid path coverage (squared)
+    paths = exploration_goal_square(dx, dy)
+        
+    action_seq_options = []
+
+    for path in paths:
+        path = np.array(path)
+        if start_pose[0] > end_pose[0]:
+            path[:,0]= -path[:,0]
+        if start_pose[1] > end_pose[1]:
+            path[:,1]= -path[:,1]
+
+        action_seq = []
+        for step in range(1, len(path)):
+            x_diff, y_diff = path[step][0] - path[step - 1][0], path[step][1] - path[step - 1][1]
+
+            if x_diff > 0:  # Go forward x
+                action_seq.append([actions['DOWN']])
+            elif x_diff < 0:  # Go backward x
+                action_seq.append([actions['UP']])
+            elif y_diff > 0:  # Go forward y
+                action_seq.append([actions['RIGHT']])
+            elif y_diff < 0:  # Go backward y
+                action_seq.append([actions['LEFT']])
+            
+            if 'STAY' in actions:
+                # Add a 'STAY' action after each step and append it to action_seq_options
+                action_seq_with_stay = action_seq.copy()
+                action_seq_with_stay.append([actions['STAY']])
+                if len(action_seq_with_stay) < lookahead :
+                    action_seq_with_stay.extend([[actions['STAY']]] *(lookahead- len(action_seq_with_stay)))
+                action_seq_options.append(np.array(action_seq_with_stay).reshape(len(action_seq_with_stay), 1))
+        
+        if len(action_seq) < lookahead and 'STAY' in actions:
+            action_seq.extend([[actions['STAY']]] *(lookahead- len(action_seq_with_stay)))
+        elif 'STAY' not in actions:
+            print('Create policies; We might neeed to implement what to do if the policy < policy_len')
+        action_seq_options.append(np.array(action_seq).reshape(len(action_seq), 1))
+
+    return action_seq_options
+
+def exploration_goal_square(dx, dy):
+    '''
+    Create 1 path going to given dx for each y latitude and vice versa for dy. 
+    This limit the path generation to half (opposing sides of the starting agent position) 
+    the number of tiles on the outline of the rectangle formed by dx and dy.
+    LIMITATION: Works with squarred areas
+    '''
+    paths = [[[0,0]]]
+    paths.append([[0,0]])
+    while paths[-1][-1] != [dx,dy] :
+        new_paths = []
+        for p in range(0, len(paths), 2):
+            # Update y-path
+            if paths[p + 1][-1][1] < dy:
+                new_step_y = paths[p + 1][-1].copy()
+                new_step_y[1] += 1
+                paths[p + 1].append(new_step_y)
+                if p == 0:
+                    new_paths.append(paths[p + 1].copy())
+
+            # Update x-path
+            if paths[p][-1][0] < dx:
+                new_step_x = paths[p][-1].copy()
+                new_step_x[0] += 1
+                paths[p].append(new_step_x)
+                if p == 0:
+                    new_paths.append(paths[p].copy())
+
+        paths.extend(new_paths)
+        
+    return paths

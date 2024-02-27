@@ -1,5 +1,8 @@
 import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
 from copy import deepcopy
+import pandas as pd
 
 from ours.pymdp import utils
 from ours.pymdp import control, inference
@@ -10,24 +13,23 @@ from ours.modules import *
 from ours.pymdp.maths import spm_dot
 
 #==== INIT AGENT ====#
-class Ours_V4():
+class Ours_V4_2(Agent):
     def __init__(self, num_obs=2, num_states=2, dim=2, observations=[0,(0,0)], learning_rate_pB=3.0, actions= {'Left':0}, \
                  set_stationary_B=True, inference_algo= 'VANILLA') -> None:
         self.agent_state_mapping = {}
         self.pose_mapping = []
         self.possible_actions = actions
         self.preferred_ob = [-1,-1]
-        self.agent = None
         self.set_stationary_B = set_stationary_B
         self.step_possible_actions = list(self.possible_actions.values())
-        self.initialisation(num_obs=num_obs, num_states=num_states, observations=observations, \
+        
+        observations, agent_params = self.create_agent_params(num_obs=num_obs, num_states=num_states, observations=observations, \
                             learning_rate_pB=learning_rate_pB, dim=dim, lookahead=4, inference_algo = inference_algo)
-
-
-    def initialisation(self,num_obs:int=2, num_states:int=2, observations:list=[0,(0,0)], 
+        super().__init__(**agent_params)
+        self.initialisation(observations=observations)
+    
+    def create_agent_params(self,num_obs:int=2, num_states:int=2, observations:list=[0,(0,0)], 
                        learning_rate_pB:float=3.0, dim:int=2, lookahead:int=4,inference_algo:str='VANILLA'):
-        """ Create agent and initialise it with env first given observations """
-
         ob = observations[0]
         p_idx = -1
         if dim > 1:
@@ -44,44 +46,72 @@ class Ours_V4():
             self.pose_mapping.append(self.current_pose)
             p_idx = self.pose_mapping.index(self.current_pose)
         
-
-        #INITIALISE AGENT
+        #INITIALISE AGENT PARAMS
         B_agent = create_B_matrix(num_states,len(self.possible_actions))
         if 'STAY' in self.possible_actions and self.set_stationary_B:
             B_agent = set_stationary(B_agent,self.possible_actions['STAY'])
         pB = utils.to_obj_array(B_agent)
 
         obs_dim = [np.max([num_obs, ob + 1])] + ([np.max([num_obs, p_idx + 1])] if dim > 1 else [])
-        
         A_agent = create_A_matrix(obs_dim,[num_states]*dim,dim)
-
         pA = utils.dirichlet_like(A_agent, scale = 1)
-        self.agent = Agent(A = A_agent, pA=pA, B = B_agent , pB = pB,policy_len= lookahead, 
-                    inference_horizon= lookahead, lr_pB=learning_rate_pB, 
-                    inference_algo = inference_algo, save_belief_hist = True, 
-                    action_selection="stochastic",use_param_info_gain=False)
-         
-        if self.agent.edge_handling_params["use_BMA"] and hasattr(self.agent, "q_pi_hist"):
-            del self.agent.q_pi_hist
-            #This is not compatible with our way of moving
+
+        return observations, {
+            'A': A_agent,
+            'B': B_agent,
+            'pA': pA,
+            'pB': pB,
+            'policy_len': lookahead,
+            'inference_horizon': lookahead,
+            'lr_pB': learning_rate_pB,
+            'inference_algo': inference_algo,
+            'save_belief_hist': True,
+            'action_selection': "stochastic",
+            'use_param_info_gain': False
+        }
+
+    def initialisation(self,observations:list=[0,(0,0)], linear_policies:bool=True, E=None):
+        """ Initialise agent with first current observation and verify that all parameters 
+        are adapted for continuous navigation.
+        linear_policies(bool): 
+        if False: we try all combinaison of actions (exponential n_action^policy_len  -wth policy_len==lookahead-) )
+        if True: We create linear path reaching at a lookahead DISTANCE (not number of consecutive actions) 
+        we make it linear 8*policy_len+4 if no 'STAY' actions, else it's polynomial with 8*policy_len^2+12*policy_len+5 In the case of 5 actions.
+        It's not linear because of the STAY action that is irregular and set only at the end of a policy.
+
+        NOTE:linear_policies=True is only tailored for num_factor==1 and len(num_control)==1 
+        """
+        if linear_policies:
+            policies = create_policies(self.policy_len, self.possible_actions)
+            self.policies = policies
+            assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
+            
+            all_policies = np.vstack(self.policies)
+
+            assert all([n_c >= max_action for (n_c, max_action) in zip(self.num_controls, list(np.max(all_policies, axis =0)+1))]), "Maximum number of actions is not consistent with `num_controls`"
+            # Construct prior over policies (uniform if not specified) 
+            if E is not None:
+                if not isinstance(E, np.ndarray):
+                    raise TypeError(
+                        'E vector must be a numpy array'
+                    )
+                self.E = E
+                assert len(self.E) == len(self.policies), f"Check E vector: length of E must be equal to number of policies: {len(self.policies)}"
+            else:
+                self.E = self._construct_E_prior()
+        self.reset(start_pose=self.pose_mapping[0])
+        if self.edge_handling_params["use_BMA"] and hasattr(self, "q_pi_hist"): #This is not compatible with our way of moving
+            del self.q_pi_hist
+            
         self.inference_params_dict = {'MMP':
                     {'num_iter': 3, 'grad_descent': True, 'tau': 0.25},
                     'VANILLA':
                     {'num_iter': 3, 'dF': 1.0, 'dF_tol': 0.001}}
-   
-        # self.agent.qs[0] = utils.onehot(0, num_states)
-        # self.agent.qs_hist.append(self.agent.qs)
-        
-        
+
         self.update_A_with_data(observations,0)
         self.update_agent_state_mapping(self.current_pose, observations, 0)
-        all_qs, qs = self.infer_states(observation = observations, distr_obs=False, partial_ob=None)
-        # mean_qs = np.mean(all_qs, axis=0)
-        # # print('INITIAL BELIEF OVER STATES')
-        # # for i in range(len(mean_qs)):
-        # #     print(mean_qs[i].round(3))
-        # print('initial belief', qs[0].round(3))
-        return self.agent
+        self.infer_states(observation = observations, distr_obs=False, partial_ob=None)
+        return 
     
     def initialise_current_pose(self, observations:list):
         qs = self.get_belief_over_states()
@@ -94,8 +124,8 @@ class Ours_V4():
             threshold = 0.7
 
         #If we are sure of a state (independent of number of states), we don't have pose as ob and A allows for pose
-        if sorted_qs[-1]-sorted_qs[-2] >= threshold and len(observations) < 2 and len(self.agent.A) > 1:
-            p_idx = np.argmax(self.agent.A[1][:,np.argmax(qs[0])])
+        if sorted_qs[-1]-sorted_qs[-2] >= threshold and len(observations) < 2 and len(self.A) > 1:
+            p_idx = np.argmax(self.A[1][:,np.argmax(qs[0])])
             self.current_pose = self.pose_mapping[p_idx]
             print('updating believed pose given certitude on state:', self.current_pose)
         
@@ -104,10 +134,10 @@ class Ours_V4():
         return self.agent_state_mapping
     
     def get_B(self):
-        return self.agent.B[0]
+        return self.B[0]
     
     def get_A(self):
-        return self.agent.A
+        return self.A
 
     def get_n_states(self):
         return len(self.agent_state_mapping)
@@ -121,16 +151,16 @@ class Ours_V4():
         
         """
         if Qs is None:
-            Qs = self.agent.qs
+            Qs = self.qs
             
         if len(Qs) == 1:
             my_qs = Qs
             
         else:
             
-            qs_copy = copy.deepcopy(Qs)
-            current_qs_idx = self.qs_step if len(self.agent.prev_obs) >= self.agent.inference_horizon \
-                                        else self.qs_step - n_step_past
+            qs_copy = [q[:self.policy_len + 1] for q in Qs] #In case we have policies of various length.
+            current_qs_idx = self.qs_step if len(self.prev_obs) > self.inference_horizon \
+                                        else np.max([self.qs_step - n_step_past,0])
             qs_mean = np.mean(qs_copy, axis=0)
             my_qs = qs_mean[current_qs_idx]
 
@@ -141,22 +171,22 @@ class Ours_V4():
         return my_qs
 
     #==== NAVIGATION SETTINGS ====#
-    def explo_oriented_navigation(self, inference_algo='VANILLA'):
+    def explo_oriented_navigation(self, inference_algo:str='VANILLA'):
         self.switch_inference_algo(inference_algo)
-        self.agent.use_param_info_gain = False
-        self.agent.use_states_info_gain = True #Should we
-        self.agent.use_utility = False
+        self.use_param_info_gain = False
+        self.use_states_info_gain = True #Should we
+        self.use_utility = False
 
     def goal_oriented_navigation(self, obs=None, **kwargs):
         inf_algo = kwargs.get('inf_algo', 'MMP')
         self.switch_inference_algo(inf_algo)
         self.update_preference(obs)
-        self.agent.use_param_info_gain = False
-        self.agent.use_states_info_gain = False #This make it FULLY Goal oriented
+        self.use_param_info_gain = False
+        self.use_states_info_gain = False #This make it FULLY Goal oriented
         #NOTE: if we want it to prefere this C but still explore a bit once certain about state 
         #(keep exploration/exploitation balanced) keep info gain
-        self.agent.use_utility = True
-        self.agent.inference_horizon = 4 
+        self.use_utility = True
+        self.inference_horizon = 4 
 
     def update_preference(self, obs:list):
         """given a list of observations we fill C with thos as preference. 
@@ -166,30 +196,30 @@ class Ours_V4():
         if isinstance(obs, list):
             self.update_A_dim_given_obs_3(obs, null_proba=[False]*len(obs))
 
-            C = self.agent._construct_C_prior()
+            C = self._construct_C_prior()
 
             for modality, ob in enumerate(obs):
                 if ob >= 0:
                     self.preferred_ob[modality] = ob
-                    ob_processed = utils.process_observation(ob, 1, [self.agent.num_obs[modality]])
+                    ob_processed = utils.process_observation(ob, 1, [self.num_obs[modality]])
                     ob = utils.to_obj_array(ob_processed)
                 else:
-                    ob = utils.obj_array_zeros([self.agent.num_obs[modality]])
+                    ob = utils.obj_array_zeros([self.num_obs[modality]])
                 C[modality] = np.array(ob[0])
 
             if not isinstance(C, np.ndarray):
                 raise TypeError(
                     'C vector must be a numpy array'
                 )
-            self.agent.C = utils.to_obj_array(C)
+            self.C = utils.to_obj_array(C)
 
-            assert len(self.agent.C) == self.agent.num_modalities, f"Check C vector: number of sub-arrays must be equal to number of observation modalities: {agent.num_modalities}"
+            assert len(self.C) == self.num_modalities, f"Check C vector: number of sub-arrays must be equal to number of observation modalities: {agent.num_modalities}"
 
-            for modality, c_m in enumerate(self.agent.C):
-                assert c_m.shape[0] == self.agent.num_obs[modality], f"Check C vector: number of rows of C vector for modality {modality} should be equal to {agent.num_obs[modality]}"
+            for modality, c_m in enumerate(self.C):
+                assert c_m.shape[0] == self.num_obs[modality], f"Check C vector: number of rows of C vector for modality {modality} should be equal to {agent.num_obs[modality]}"
         else:
             self.preferred_ob = [-1,-1]
-            self.agent.C = self.agent._construct_C_prior()
+            self.C = self._construct_C_prior()
 
     def update_agent_state_mapping(self, pose:tuple, ob:list, state_belief:list=None)-> dict:
         """ Dictionnary to keep track of believes and associated obs, usefull for testing purposes mainly"""
@@ -216,14 +246,14 @@ class Ours_V4():
     
     def switch_inference_algo(self, algo_type=None):
         if isinstance(algo_type, str):
-            self.agent.inference_algo = algo_type
+            self.inference_algo = algo_type
 
-        elif self.agent.inference_algo == "VANILLA":
-            self.agent.inference_algo = "MMP" 
+        elif self.inference_algo == "VANILLA":
+            self.inference_algo = "MMP" 
         
         else:
-            self.agent.inference_algo = "VANILLA" 
-        self.agent.inference_params = self.inference_params_dict[self.agent.inference_algo]
+            self.inference_algo = "VANILLA" 
+        self.inference_params = self.inference_params_dict[self.inference_algo]
         
     #==== NAVIGATION METHODS ====#
    
@@ -235,7 +265,7 @@ class Ours_V4():
     def infer_action(self, **kwargs):
         observations = kwargs.get('observation', None)
         next_possible_actions = kwargs.get('next_possible_actions', list(self.possible_actions.values()))
-        qs_hist = self.agent.qs_hist[-2:]
+        qs_hist = self.qs_hist[-2:]
         #prior = np.pad(qs_hist[-2][0], (0, max(len(qs_hist[-2][0]), len(qs_hist[-1][0])) - len(qs_hist[-2][0])), mode='constant')
 
 
@@ -245,10 +275,10 @@ class Ours_V4():
         #If self.current_pose is not None then we have step_update that infer state
             
             #NB: Only give obs if state not been inferred before 
-            if len(observations) < len(self.agent.A):
+            if len(observations) < len(self.A):
                 partial_ob = 0
                             
-            elif len(observations) == len(self.agent.A):
+            elif len(observations) == len(self.A):
                 partial_ob = None
                 if self.current_pose == None:
                     self.current_pose = observations[1]
@@ -257,7 +287,7 @@ class Ours_V4():
             _, posterior = self.infer_states(observation = observations, distr_obs=False, partial_ob=partial_ob, save_hist=True)
             #print('infer action: self.current_pose', self.current_pose, posterior[0].round(3))
         
-        self.agent.use_param_info_gain = False
+        self.use_param_info_gain = False
 
         #In case we don't have observations.
         posterior = self.get_belief_over_states()
@@ -267,7 +297,7 @@ class Ours_V4():
         action = self.sample_action(next_possible_actions)
         
         #NOTE: What we would expect given prev prior and B transition 
-        prior = spm_dot(self.agent.B[0][:, :, int(action)], prior)
+        prior = spm_dot(self.B[0][:, :, int(action)], prior)
         
         return int(action), {
             "qs": posterior[0],
@@ -280,12 +310,12 @@ class Ours_V4():
     
     def update_A_with_data(self,obs:list, state:int)->np.ndarray:
         """Given obs and state, update A entry """
-        A = self.agent.A
+        A = self.A
         
-        for dim in range(self.agent.num_modalities ):
+        for dim in range(self.num_modalities ):
             A[dim][:,state] = 0
             A[dim][obs[dim],state] = 1
-        self.agent.A = A
+        self.A = A
         return A
 
     def update_A_dim_given_obs_3(self, obs:list,null_proba:list=[True]) -> np.ndarray:
@@ -293,7 +323,7 @@ class Ours_V4():
         Verify if the observations are new and fit into the current A shape.
         If not, increase A shape in observation (n row) only.
         '''
-        A = self.agent.A
+        A = self.A
         num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A=A)
         
         # Calculate the maximum dimension increase needed across all modalities
@@ -302,31 +332,31 @@ class Ours_V4():
         # Update matrices size
         for m in range(num_modalities):
             A[m] = update_A_matrix_size(A[m], add_ob=dim_add[m], null_proba=null_proba[m])
-            if self.agent.pA is not None:
-                self.agent.pA[m] = utils.dirichlet_like(utils.to_obj_array(A[m]), scale=1)[0]
+            if self.pA is not None:
+                self.pA[m] = utils.dirichlet_like(utils.to_obj_array(A[m]), scale=1)[0]
         num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A=A)
-        self.agent.num_obs = num_obs
-        self.agent.A = A
+        self.num_obs = num_obs
+        self.A = A
         return A
 
     def update_B_dim_given_A(self)-> np.ndarray:
         """ knowing A dimension, update B state dimension to match"""
-        B = self.agent.B
-        add_dim = self.agent.A[0].shape[1]-B[0].shape[1]
+        B = self.B
+        add_dim = self.A[0].shape[1]-B[0].shape[1]
         if add_dim > 0: 
             #increase B dim
             B = update_B_matrix_size(B, add= add_dim)
-            self.agent.pB = update_B_matrix_size(self.agent.pB, add= add_dim, alter_weights=False)
-            if len(self.agent.qs) > 1:
-                for seq in self.agent.qs:
+            self.pB = update_B_matrix_size(self.pB, add= add_dim, alter_weights=False)
+            if len(self.qs) > 1:
+                for seq in self.qs:
                     for subseq in seq:
                         subseq[0] = np.append(subseq[0], [0] * add_dim)
             else:
             
-                self.agent.qs[0] = np.append(self.agent.qs[0],[0]*add_dim)
+                self.qs[0] = np.append(self.qs[0],[0]*add_dim)
         
-        self.agent.num_states = [B[0].shape[0]]
-        self.agent.B = B
+        self.num_states = [B[0].shape[0]]
+        self.B = B
         return B
     
     def update_A_dim_given_pose(self, pose_idx:int,null_proba:bool=True) -> np.ndarray:
@@ -334,7 +364,7 @@ class Ours_V4():
         Verify if the observations are new and fit into the current A shape.
         If not, increase A shape and associate those observations with the newest state generated.
         '''
-        A = self.agent.A
+        A = self.A
         num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A=A)
         
         # Calculate the maximum dimension increase needed across all modalities
@@ -349,21 +379,21 @@ class Ours_V4():
                 columns_wthout_data = np.sort(np.append(np.where(np.all(A[1] == 1/A[1].shape[0], axis=0))[0], np.where(np.all(A[1] == 0, axis=0))[0]))
                 A[1][:, columns_wthout_data[0]] = 0
                 A[1][pose_idx, columns_wthout_data[0]] = 1
-                self.agent.num_obs[1] = A[1].shape[0]
+                self.num_obs[1] = A[1].shape[0]
 
-            if self.agent.pA is not None:
-                self.agent.pA = utils.dirichlet_like(utils.to_obj_array(A), scale=1)
+            if self.pA is not None:
+                self.pA = utils.dirichlet_like(utils.to_obj_array(A), scale=1)
                     
-        self.agent.num_states = [A[0].shape[1]]
-        self.agent.A = A
+        self.num_states = [A[0].shape[1]]
+        self.A = A
         return A
     
     def update_C_dim(self):
-        if self.agent.C is not None:
-            num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A=self.agent.A) 
+        if self.C is not None:
+            num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A=self.A) 
             for m in range(num_modalities):
-                if self.agent.C[m].shape[0] < num_obs[m]:
-                    self.agent.C[m] = np.append(self.agent.C[m], [0]*(num_obs[m]- self.agent.C[m].shape[0]))
+                if self.C[m].shape[0] < num_obs[m]:
+                    self.C[m] = np.append(self.C[m], [0]*(num_obs[m]- self.C[m].shape[0]))
                     
     #==== update Believes ====#
     def update_A_belief(self,obs:list)->None:
@@ -375,15 +405,15 @@ class Ours_V4():
 
     def update_believes_v2(self, Qs:list, action:int, obs:list)-> None:
         #UPDATE B
-        if len(self.agent.qs_hist) > 0:#secutity check
-            qs_hist = self.get_belief_over_states(self.agent.qs_hist[-1], n_step_past=1)
+        if len(self.qs_hist) > 0:#secutity check
+            qs_hist = self.get_belief_over_states(self.qs_hist[-1])
             qs_hist[0] = np.append(qs_hist[0],[0]*\
                                    (len(Qs[0])-len(qs_hist[0])))
             self.update_B(Qs, qs_hist, action, lr_pB = 10) 
             #2 WAYS TRANSITION UPDATE (only if T to diff state)
             if np.argmax(qs_hist[0]) != np.argmax(Qs[0]):
                 a_inv = reverse_action(self.possible_actions, action)
-                self.update_B(qs_hist, Qs, a_inv, lr_pB = 5)
+                self.update_B(qs_hist, Qs, a_inv, lr_pB = 7)
         self.update_A_belief(obs)
     
     def add_ghost_node_v3(self, qs:np.ndarray, p_idx:int, possible_next_actions:list)-> None:
@@ -407,10 +437,10 @@ class Ours_V4():
                     _, hypo_qs = self.infer_states([p_idx], np.array([action]), partial_ob=1, save_hist=False)
                     if len(qs[0]) < len(hypo_qs[0]):
                         qs[0] = np.append(qs[0],[0]*(len(hypo_qs[0])-len(qs[0])))
-                    self.update_B(hypo_qs, qs, action, lr_pB = 3) 
+                    self.update_B(hypo_qs, qs, action, lr_pB = 5) 
                     self.update_agent_state_mapping(n_pose, [-1], hypo_qs[0])
-                # a_inv = reverse_action(self.possible_actions, action)
-                # self.update_B(qs, hypo_qs, a_inv, lr_pB = 1)
+                    a_inv = reverse_action(self.possible_actions, action)
+                    self.update_B(qs, hypo_qs, a_inv, lr_pB = 3)
         
     
     #==== PYMDP modified methods ====#
@@ -430,46 +460,46 @@ class Ours_V4():
             policy-indices ``p_idx``. Subsequent entries ``q[:][1, 2, ...]`` will be initialized to empty ``numpy.ndarray`` objects.
         """
 
-        self.agent.curr_timestep = 0
-        self.agent.action = None
-        self.agent.prev_actions = None
-        self.agent.prev_obs = []
+        self.curr_timestep = 0
+        self.action = None
+        self.prev_actions = None
+        self.prev_obs = []
         self.qs_step = 0
      
         self.current_pose = start_pose
         if init_qs is None:
             
-            self.agent.D = self.agent._construct_D_prior()
+            self.D = self._construct_D_prior()
            
-            if hasattr(self.agent, "q_pi_hist"):
-                self.agent.q_pi_hist = []
+            if hasattr(self, "q_pi_hist"):
+                self.q_pi_hist = []
 
-            if hasattr(self.agent, "qs_hist"):
-                self.agent.qs_hist = []
+            if hasattr(self, "qs_hist"):
+                self.qs_hist = []
             
-            if self.agent.inference_algo == 'VANILLA':
-                self.agent.qs = utils.obj_array_uniform(self.agent.num_states)
+            if self.inference_algo == 'VANILLA':
+                self.qs = utils.obj_array_uniform(self.num_states)
             else: # in the case you're doing MMP (i.e. you have an inference_horizon > 1), we have to account for policy- and timestep-conditioned posterior beliefs
-                self.agent.qs = utils.obj_array(len(self.agent.policies))
-                for p_i, _ in enumerate(self.agent.policies):
+                self.qs = utils.obj_array(len(self.policies))
+                for p_i, _ in enumerate(self.policies):
                 
-                    self.agent.qs[p_i] = utils.obj_array_uniform(\
-                        [self.agent.num_states] * (self.agent.inference_horizon + self.agent.policy_len + 1)) # + 1 to include belief about current timestep
-                    #self.agent.qs[p_i][0] = utils.obj_array_uniform(self.agent.num_states)
+                    self.qs[p_i] = utils.obj_array_uniform(\
+                        [self.num_states] * (self.inference_horizon + self.policy_len + 1)) # + 1 to include belief about current timestep
+                    #self.qs[p_i][0] = utils.obj_array_uniform(self.num_states)
                 
-                first_belief = utils.obj_array(len(self.agent.policies))
-                for p_i, _ in enumerate(self.agent.policies):
-                    first_belief[p_i] = copy.deepcopy(self.agent.D) 
+                first_belief = utils.obj_array(len(self.policies))
+                for p_i, _ in enumerate(self.policies):
+                    first_belief[p_i] = copy.deepcopy(self.D) 
                 
-                if self.agent.edge_handling_params['policy_sep_prior']:
-                    self.agent.set_latest_beliefs(last_belief = first_belief)
+                if self.edge_handling_params['policy_sep_prior']:
+                    self.set_latest_beliefs(last_belief = first_belief)
                 else:
-                    self.agent.set_latest_beliefs(last_belief = self.agent.D)
+                    self.set_latest_beliefs(last_belief = self.D)
         
         else:
-            self.agent.qs = init_qs
+            self.qs = init_qs
 
-        return self.agent.qs
+        return self.qs
     
     def update_B(self,qs:np.ndarray, qs_prev:np.ndarray, action:int, lr_pB:int=None)-> np.ndarray:
         """
@@ -487,20 +517,20 @@ class Ours_V4():
         """
         
         if lr_pB is None:
-            lr_pB = self.agent.lr_pB
+            lr_pB = self.lr_pB
 
         qB = update_state_likelihood_dirichlet(
-            self.agent.pB,
-            self.agent.B,
+            self.pB,
+            self.B,
             [action],
             qs,
             qs_prev,
             lr_pB,
-            self.agent.factors_to_learn
+            self.factors_to_learn
         )
 
-        self.agent.pB = qB # set new prior to posterior
-        self.agent.B = utils.norm_dist_obj_arr(qB)  # take expected value of posterior Dirichlet parameters to calculate posterior over B array
+        self.pB = qB # set new prior to posterior
+        self.B = utils.norm_dist_obj_arr(qB)  # take expected value of posterior Dirichlet parameters to calculate posterior over B array
         return qB
 
     def update_A(self, obs, qs=None):
@@ -519,18 +549,18 @@ class Ours_V4():
             Posterior Dirichlet parameters over observation self (same shape as ``A``), after having updated it with observations.
         """
         if qs is None:
-            qs = self.agent.qs
+            qs = self.qs
         qA = update_obs_likelihood_dirichlet(
-            self.agent.pA, 
-            self.agent.A, 
+            self.pA, 
+            self.A, 
             obs, 
             qs, 
-            self.agent.lr_pA, 
-            self.agent.modalities_to_learn
+            self.lr_pA, 
+            self.modalities_to_learn
         )
 
-        self.agent.pA = qA # set new prior to posterior
-        self.agent.A = utils.norm_dist_obj_arr(qA) # take expected value of posterior Dirichlet parameters to calculate posterior over A array
+        self.pA = qA # set new prior to posterior
+        self.A = utils.norm_dist_obj_arr(qA) # take expected value of posterior Dirichlet parameters to calculate posterior over A array
 
         return qA
     
@@ -553,111 +583,112 @@ class Ours_V4():
             ``qs[p_idx][t_idx][f_idx]`` refers to beliefs about marginal factor ``f_idx`` expected under policy ``p_idx`` 
             at timepoint ``t_idx``.
         """
-        # print('infer state',self.agent.inference_algo, action)
+        # print('infer state',self.inference_algo, action)
         observation = tuple(observation) if not distr_obs else observation
-   
         if save_hist:
-            self.agent.prev_obs.append(observation)
-            observations_hist = self.agent.prev_obs
+            self.prev_obs.append(observation)
+            observations_hist = self.prev_obs
         else:
-            observations_hist = self.agent.prev_obs.copy()
+            observations_hist = self.prev_obs.copy()
             observations_hist.append(observation)
 
         if action != None:
-            if self.agent.prev_actions != None:
-                prev_actions = self.agent.prev_actions.copy()
+            if self.prev_actions != None:
+                prev_actions = self.prev_actions.copy()
             else:
                 prev_actions = []
             prev_actions.append(action)
         else:
-            prev_actions = self.agent.prev_actions
+            prev_actions = self.prev_actions
 
-        if len(observations_hist) > self.agent.inference_horizon:
-            latest_obs = observations_hist[-self.agent.inference_horizon:]
-            latest_actions = prev_actions[-(self.agent.inference_horizon-1):]
+        if len(observations_hist) > self.inference_horizon:
+            latest_obs = observations_hist[-self.inference_horizon:]
+            latest_actions = prev_actions[-(self.inference_horizon-1):]
         else:
             latest_obs = observations_hist
             latest_actions = prev_actions
         
         if partial_ob is None and len(latest_obs[0]) != len(latest_obs[-1]):
             self.qs_step = 0
-            self.agent.prev_actions = None
-            self.agent.prev_obs = []
+            self.prev_actions = None
+            self.prev_obs = []
             if save_hist:
-                self.agent.prev_obs = [latest_obs[-1]]
+                self.prev_obs = [latest_obs[-1]]
         
             
             latest_obs = [latest_obs[-1]]
-            latest_actions = self.agent.prev_actions
-
-        if self.agent.inference_algo == "VANILLA":
-            if self.agent.action is not None:
+            latest_actions = self.prev_actions
+        if self.inference_algo == "VANILLA":
+            if self.action is not None:
                 qs = self.get_belief_over_states() #we don't want to consider current obs to selest qs
                 empirical_prior = control.get_expected_states(
-                    qs, self.agent.B, self.agent.action.reshape(1, -1) #type: ignore
+                    qs, self.B, self.action.reshape(1, -1) #type: ignore
                 )[0]
             else:
-                
-                empirical_prior = self.agent._construct_D_prior() #self.agent.D
-    
+                self.D = self._construct_D_prior() #self.D
+                empirical_prior = self.D
+
             qs = update_posterior_states(
-            self.agent.A,
+            self.A,
             observation,
             empirical_prior,
             partial_ob,
-            **self.agent.inference_params
+            **self.inference_params
             )
             F = 0
             mean_qs_over_policies = qs.copy()
-        elif self.agent.inference_algo == "MMP":
-        
-            if not hasattr(self.agent, "qs"):
-                self.agent.reset()
+            qs_step = 0
+        elif self.inference_algo == "MMP":
+
+            if not hasattr(self, "qs"):
+                self.reset()
     
-            prior = self.agent.latest_belief
+            prior = self.latest_belief
 
             #MMP 
             if isinstance(prior[0][0], np.ndarray):  # Check if nested array
                 for i in range(len(prior)):
-                    if len(prior[i][0]) < self.agent.num_states[0]:
-                        prior[i][0] = np.append(prior[i][0], [0] * (self.agent.num_states[0] - len(prior[i][0])))
-                self.agent.latest_belief = prior
-                if not self.agent.edge_handling_params['policy_sep_prior']:
+                    if len(prior[i][0]) < self.num_states[0]:
+                        prior[i][0] = np.append(prior[i][0], [0] * (self.num_states[0] - len(prior[i][0])))
+                self.latest_belief = prior
+                if not self.edge_handling_params['policy_sep_prior']:
                     prior = np.mean(prior, axis=0)
+      
             
-            
-            elif len(prior[0]) < self.agent.num_states[0]:
-                prior[0] = np.append(prior[0], [0] * (self.agent.num_states[0] - len(prior[0])))
-                self.agent.latest_belief = prior
-
+            elif len(prior[0]) < self.num_states[0]:
+                prior[0] = np.append(prior[0], [0] * (self.num_states[0] - len(prior[0])))
+                self.latest_belief = prior
+                self.D = self._construct_D_prior()
+     
 
             # print('latest_obs',latest_obs)
             # print('latest_actions',latest_actions)
             # print('partial_ob', partial_ob)
-            # print('prior', self.agent.latest_belief)
+            # print('prior', self.latest_belief)
             qs, F = update_posterior_states_full(
-                self.agent.A,
-                self.agent.B,
+                self.A,
+                self.B,
                 latest_obs,
-                self.agent.policies, 
+                self.policies, 
                 latest_actions, 
                 prior = prior, 
-                policy_sep_prior = self.agent.edge_handling_params['policy_sep_prior'],
+                policy_sep_prior = self.edge_handling_params['policy_sep_prior'],
                 partial_ob = partial_ob,
-                **self.agent.inference_params
+                **self.inference_params
             )
-          
-            mean_qs = np.mean(qs, axis=0)
-            self.qs_step = len(latest_obs)-1
-            mean_qs_over_policies = mean_qs[self.qs_step]
+  
+            selected_qs = [q[:self.policy_len + 1] for q in qs]
+            mean_qs = np.mean(selected_qs, axis=0)
+            qs_step = len(latest_obs)-1
+            mean_qs_over_policies = mean_qs[qs_step]
             # print('current full qs mean', mean_qs)
             # print('current_qs',mean_qs_over_policies, 'qs idx', self.qs_step, 'save hist', save_hist)
         if save_hist:
-            self.agent.F = F # variational free energy of each policy  
-            
-            if hasattr(self.agent, "qs_hist"):
-                self.agent.qs_hist.append(qs)
-            self.agent.qs = qs
+            self.F = F # variational free energy of each policy  
+            self.qs_step = qs_step
+            if hasattr(self, "qs_hist"):
+                self.qs_hist.append(qs)
+            self.qs = qs
 
         return qs, mean_qs_over_policies
 
@@ -676,53 +707,53 @@ class Ours_V4():
             Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
         """
         if qs is None:
-            qs = self.agent.qs
+            qs = self.qs
 
-        if self.agent.inference_algo == "VANILLA":
+        if self.inference_algo == "VANILLA":
             
             q_pi, G = control.update_posterior_policies(
                 qs,
-                self.agent.A,
-                self.agent.B,
-                self.agent.C,
-                self.agent.policies,
-                self.agent.use_utility,
-                self.agent.use_states_info_gain,
-                self.agent.use_param_info_gain,
-                self.agent.pA,
-                self.agent.pB,
-                E = self.agent.E,
-                gamma = self.agent.gamma
+                self.A,
+                self.B,
+                self.C,
+                self.policies,
+                self.use_utility,
+                self.use_states_info_gain,
+                self.use_param_info_gain,
+                self.pA,
+                self.pB,
+                E = self.E,
+                gamma = self.gamma
             )
-        elif self.agent.inference_algo == "MMP":
+        elif self.inference_algo == "MMP":
             # if qs is None:
             #     future_qs_seq = self.get_future_qs()
 
             q_pi, G = update_posterior_policies_full(
                 qs, #future_qs_seq
-                self.agent.A,
-                self.agent.B,
-                self.agent.C,
-                self.agent.policies,
-                self.agent.use_utility,
-                self.agent.use_states_info_gain,
-                self.agent.use_param_info_gain,
-                self.agent.latest_belief,
-                self.agent.pA,
-                self.agent.pB,
-                F = self.agent.F,
-                E = self.agent.E,
-                gamma = self.agent.gamma
+                self.A,
+                self.B,
+                self.C,
+                self.policies,
+                self.use_utility,
+                self.use_states_info_gain,
+                self.use_param_info_gain,
+                self.latest_belief,
+                self.pA,
+                self.pB,
+                F = self.F,
+                E = self.E,
+                gamma = self.gamma
             )
 
-        if hasattr(self.agent, "q_pi_hist"):
-            self.agent.q_pi_hist.append(q_pi)
-            if len(self.agent.q_pi_hist) > self.agent.inference_horizon:
-                self.agent.q_pi_hist = self.agent.q_pi_hist[-(self.agent.inference_horizon-1):]
+        if hasattr(self, "q_pi_hist"):
+            self.q_pi_hist.append(q_pi)
+            if len(self.q_pi_hist) > self.inference_horizon:
+                self.q_pi_hist = self.q_pi_hist[-(self.inference_horizon-1):]
             
 
-        self.agent.q_pi = q_pi
-        self.agent.G = G
+        self.q_pi = q_pi
+        self.G = G
         return q_pi, G
     
     def sample_action(self, possible_first_actions:list=None):
@@ -740,23 +771,23 @@ class Ours_V4():
         """
         if possible_first_actions != None:
             #Removing all policies leading us to uninteresting action.
-            policies, q_pi = zip(*[(policy, self.agent.q_pi[p_id]) for p_id, policy \
-                                   in enumerate(self.agent.policies) if policy[0] in possible_first_actions])
+            policies, q_pi = zip(*[(policy, self.q_pi[p_id]) for p_id, policy \
+                                   in enumerate(self.policies) if policy[0] in possible_first_actions])
         else:
-            policies =  self.agent.policies
-            q_pi = self.agent.q_pi
+            policies =  self.policies
+            q_pi = self.q_pi
 
-        if self.agent.sampling_mode == "marginal":
+        if self.sampling_mode == "marginal":
             action = control.sample_action(
-                q_pi, policies, self.agent.num_controls, action_selection = self.agent.action_selection, alpha = self.agent.alpha
+                q_pi, policies, self.num_controls, action_selection = self.action_selection, alpha = self.alpha
             )
-        elif self.agent.sampling_mode == "full":
-            action = control.sample_policy(q_pi, policies, self.agent.num_controls,
-                                           action_selection=self.agent.action_selection, alpha=self.agent.alpha)
+        elif self.sampling_mode == "full":
+            action = control.sample_policy(q_pi, policies, self.num_controls,
+                                           action_selection=self.action_selection, alpha=self.alpha)
 
-        self.agent.action = action
+        self.action = action
 
-        self.agent.step_time()
+        self.step_time()
 
         return action
     
@@ -776,36 +807,28 @@ class Ours_V4():
             if pose not in self.pose_mapping:
                 self.pose_mapping.append(pose)
             p_idx = self.pose_mapping.index(pose)
-
             # prev_state_size = agent.num_states[0]
             #3. UPDATE A AND B DIM WITH THOSE DATA
             self.update_A_dim_given_obs_3([ob,p_idx], null_proba=[False,False])
             self.update_B_dim_given_A()
             # new_state_size = agent.num_states[0]
-
             #4. UPDATE BELIEVES GIVEN OBS
             _, Qs = self.infer_states([ob,p_idx], distr_obs=False, save_hist=False)
             print('prior on believed state; action', action, 'colour_ob:', ob, 'inf pose:',pose,'belief:', Qs[0].round(3))
-            
             
             #4.5 UPDATE A AND B WITH THOSE BELIEVES
             self.update_believes_v2(Qs, action, [ob,p_idx])
             qs = self.get_belief_over_states()
             # print('Defined belief after A and B update:', qs[0].round(3))
             self.update_agent_state_mapping(pose, [ob,p_idx], qs[0])
-            
             #ADD KNOWLEDGE WALL T OR GHOST NODES
             #inv_action = reverse_action(self.possible_actions, action) #just to gain some computation time
             self.add_ghost_node_v3(qs,p_idx, possible_next_actions)
+
             #This is not mandatory, just a gain of time
             if 'STAY' in self.possible_actions:
-                self.agent.B[0] = set_stationary(self.agent.B[0], self.possible_actions['STAY'])
+                self.B[0] = set_stationary(self.B[0], self.possible_actions['STAY'])
             self.update_C_dim()
-
-
-def set_stationary(mat, idx=-1):
-    mat[:,:,idx] = np.eye(mat.shape[0])
-    return mat
 
 
 

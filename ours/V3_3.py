@@ -120,7 +120,7 @@ class Ours_V3_3():
         #(keep exploration/exploitation balanced) keep info gain
         self.agent.use_utility = True
 
-    def explo_oriented_navigation(self):
+    def explo_oriented_navigation(self, **kwargs):
         self.agent.use_param_info_gain = True
         #self.agent.use_states_info_gain = True #Should we
         self.agent.use_utility = False
