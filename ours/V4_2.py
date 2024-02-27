@@ -22,7 +22,8 @@ class Ours_V4_2(Agent):
         self.preferred_ob = [-1,-1]
         self.set_stationary_B = set_stationary_B
         self.step_possible_actions = list(self.possible_actions.values())
-        
+        self.linear_policies = True
+
         observations, agent_params = self.create_agent_params(num_obs=num_obs, num_states=num_states, observations=observations, \
                             learning_rate_pB=learning_rate_pB, dim=dim, lookahead=4, inference_algo = inference_algo)
         super().__init__(**agent_params)
@@ -70,7 +71,7 @@ class Ours_V4_2(Agent):
             'use_param_info_gain': False
         }
 
-    def initialisation(self,observations:list=[0,(0,0)], linear_policies:bool=True, E=None):
+    def initialisation(self,observations:list=[0,(0,0)], E=None):
         """ Initialise agent with first current observation and verify that all parameters 
         are adapted for continuous navigation.
         linear_policies(bool): 
@@ -81,7 +82,8 @@ class Ours_V4_2(Agent):
 
         NOTE:linear_policies=True is only tailored for num_factor==1 and len(num_control)==1 
         """
-        if linear_policies:
+        
+        if self.linear_policies:
             policies = create_policies(self.policy_len, self.possible_actions)
             self.policies = policies
             assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
@@ -711,7 +713,7 @@ class Ours_V4_2(Agent):
 
         if self.inference_algo == "VANILLA":
             
-            q_pi, G = control.update_posterior_policies(
+            q_pi, G = update_posterior_policies(
                 qs,
                 self.A,
                 self.B,
@@ -723,7 +725,8 @@ class Ours_V4_2(Agent):
                 self.pA,
                 self.pB,
                 E = self.E,
-                gamma = self.gamma
+                gamma = self.gamma,
+                diff_policy_len = self.linear_policies
             )
         elif self.inference_algo == "MMP":
             # if qs is None:
@@ -743,7 +746,8 @@ class Ours_V4_2(Agent):
                 self.pB,
                 F = self.F,
                 E = self.E,
-                gamma = self.gamma
+                gamma = self.gamma,
+                diff_policy_len = self.linear_policies
             )
 
         if hasattr(self, "q_pi_hist"):
