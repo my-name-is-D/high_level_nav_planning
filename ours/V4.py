@@ -65,7 +65,7 @@ class Ours_V4():
             del self.agent.q_pi_hist
             #This is not compatible with our way of moving
         self.inference_params_dict = {'MMP':
-                    {'num_iter': 3, 'grad_descent': True, 'tau': 0.25},
+                    {'num_iter': 6, 'grad_descent': True, 'tau': 0.25},
                     'VANILLA':
                     {'num_iter': 3, 'dF': 1.0, 'dF_tol': 0.001}}
    
@@ -263,7 +263,6 @@ class Ours_V4():
         posterior = self.get_belief_over_states()
         print('infer action: inferred prior state', posterior[0].round(3))
         q_pi, efe = self.infer_policies(posterior)
-        
         action = self.sample_action(next_possible_actions)
         
         #NOTE: What we would expect given prev prior and B transition 
@@ -376,7 +375,7 @@ class Ours_V4():
     def update_believes_v2(self, Qs:list, action:int, obs:list)-> None:
         #UPDATE B
         if len(self.agent.qs_hist) > 0:#secutity check
-            qs_hist = self.get_belief_over_states(self.agent.qs_hist[-1], n_step_past=1)
+            qs_hist = self.get_belief_over_states(self.agent.qs_hist[-1])
             qs_hist[0] = np.append(qs_hist[0],[0]*\
                                    (len(Qs[0])-len(qs_hist[0])))
             self.update_B(Qs, qs_hist, action, lr_pB = 10) 
@@ -609,6 +608,7 @@ class Ours_V4():
             )
             F = 0
             mean_qs_over_policies = qs.copy()
+            qs_step = 0
         elif self.agent.inference_algo == "MMP":
         
             if not hasattr(self.agent, "qs"):
@@ -634,7 +634,7 @@ class Ours_V4():
             # print('latest_obs',latest_obs)
             # print('latest_actions',latest_actions)
             # print('partial_ob', partial_ob)
-            # print('prior', self.agent.latest_belief)
+            # print('prior:', self.agent.latest_belief)
             qs, F = update_posterior_states_full(
                 self.agent.A,
                 self.agent.B,
@@ -648,13 +648,13 @@ class Ours_V4():
             )
           
             mean_qs = np.mean(qs, axis=0)
-            self.qs_step = len(latest_obs)-1
-            mean_qs_over_policies = mean_qs[self.qs_step]
+            qs_step = len(latest_obs)-1
+            mean_qs_over_policies = mean_qs[qs_step]
             # print('current full qs mean', mean_qs)
             # print('current_qs',mean_qs_over_policies, 'qs idx', self.qs_step, 'save hist', save_hist)
         if save_hist:
             self.agent.F = F # variational free energy of each policy  
-            
+            self.qs_step = qs_step
             if hasattr(self.agent, "qs_hist"):
                 self.agent.qs_hist.append(qs)
             self.agent.qs = qs
@@ -801,15 +801,7 @@ class Ours_V4():
             if 'STAY' in self.possible_actions:
                 self.agent.B[0] = set_stationary(self.agent.B[0], self.possible_actions['STAY'])
             self.update_C_dim()
-
-
-def set_stationary(mat, idx=-1):
-    mat[:,:,idx] = np.eye(mat.shape[0])
-    return mat
-
-
-
-
+  
 
 
 

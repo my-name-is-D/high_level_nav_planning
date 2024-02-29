@@ -226,7 +226,6 @@ def update_posterior_states_full(
     F = np.zeros(len(policies)) # variational free energy of policies
 
     for p_idx, policy in enumerate(policies):
-        # print('lh_seq:', len(lh_seq), policy.shape, prior.shape)
         # get sequence and the free energy for policy
         qs_seq_pi[p_idx], F[p_idx] = run_mmp(
             lh_seq,
@@ -467,7 +466,7 @@ def update_posterior_policies_full(
         Negative expected free energies of each policy, i.e. a vector containing one negative expected free energy per policy.
     """
 
-    num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A, B)
+    # num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A, B)
     
     num_policies = len(policies)
 
@@ -480,7 +479,7 @@ def update_posterior_policies_full(
     #     qo_seq[t] = utils.obj_array_zeros(num_obs)
 
     # initialise expected observations
-    qo_seq_pi = utils.obj_array(num_policies)
+    # qo_seq_pi = utils.obj_array(num_policies)
 
     # initialize (negative) expected free energies for all policies
     G = np.zeros(num_policies)
@@ -498,17 +497,16 @@ def update_posterior_policies_full(
         policy_length = len(policy)
 
         qs_pi = control.get_expected_states(qs_seq_pi, B, policy)
-        qo_seq_pi[p_idx] = control.get_expected_obs(qs_pi, A)
-        str_p = from_int_to_str(policy)
+        qo_pi = control.get_expected_obs(qs_pi, A)
+        # str_p = from_int_to_str(policy)
         
         if use_utility:
-            utility_term = control.calc_expected_utility(qo_seq_pi[p_idx], C)
+            utility_term = control.calc_expected_utility(qo_pi, C)
             if diff_policy_len : 
                 utility_term = utility_term/ policy_length
-            # print('infer_policies:policy', str_p, 'utility_term',utility_term,'expected_obs', qo_seq_pi[p_idx] )
+
             G[p_idx] +=  utility_term
-            # if np.array_equal(policy[:3].flatten(),[1,1,1]):
-            #     print('UTILITY of policy', from_int_to_str(policy), G[p_idx])
+            
         if use_states_info_gain:
             info_gain = control.calc_states_info_gain(A, qs_pi)
             if diff_policy_len : 
@@ -516,7 +514,7 @@ def update_posterior_policies_full(
             G[p_idx] += info_gain
         if use_param_info_gain:
             if pA is not None:
-                param_info_gain = control.calc_pA_info_gain(pA, qo_seq_pi[p_idx], qs_pi)
+                param_info_gain = control.calc_pA_info_gain(pA, qo_pi, qs_pi)
                 if diff_policy_len : 
                     param_info_gain = param_info_gain/ policy_length
                 G[p_idx] += param_info_gain
@@ -606,7 +604,7 @@ def update_A_matrix_size(A, add_ob=0, add_state=0, null_proba = True):
 
 
 #==== POLICY GENERATION ====#
-def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0))-> list:
+def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0), lookahead_distance:bool=False)-> list:
     ''' Given current pose, and the goals poses
     we want to explore or reach those goals, 
     generate policies going around in a square perimeter. 
@@ -616,7 +614,7 @@ def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0))-> list
     policies_lists = []
     #get all the actions leading to the endpoints
     for endpoint in goal_poses:
-        action_seq_options = define_policies_to_goal(current_pose, endpoint, actions, lookahead)
+        action_seq_options = define_policies_to_goal(current_pose, endpoint, actions, lookahead, lookahead_distance)
         policies_lists.extend(action_seq_options)
 
     if 'STAY' in actions:
@@ -645,12 +643,15 @@ def define_policies_objectives(current_pose:list, lookahead:int) ->list:
     
     return goal_poses
 
-def define_policies_to_goal(start_pose:list, end_pose:list, actions:dict, lookahead:int)->list:
+def define_policies_to_goal(start_pose:list, end_pose:list, actions:dict, lookahead:int, lookahead_distance:bool=False)->list:
     '''
     Given the current pose and goal pose establish all the sequence of actions 
     leading TOWARD the objective. 
     This code is valid without considering obstacles. If there are, consider
     expanding the area of possible paths.
+    actions(dict): the list of possible actions
+    lookahead(int): the distance or number of steps to look forward for
+    lookahead_distance(bool): wether the lookahead is to be considered as a distance or number of steps.
     '''
     dx,dy = abs(int(start_pose[0] - end_pose[0])), abs(int(start_pose[1] - end_pose[1])) # destination cell
 
@@ -679,16 +680,20 @@ def define_policies_to_goal(start_pose:list, end_pose:list, actions:dict, lookah
             elif y_diff < 0:  # Go backward y
                 action_seq.append([actions['LEFT']])
             
+            #If we want the same number of action in all policies, 
+            if lookahead_distance == False and len(action_seq) == lookahead: #not the more optimal, but easiest.
+                break
+
             if 'STAY' in actions:
                 # Add a 'STAY' action after each step and append it to action_seq_options
                 action_seq_with_stay = action_seq.copy()
                 action_seq_with_stay.append([actions['STAY']])
                 if len(action_seq_with_stay) < lookahead :
-                    action_seq_with_stay.extend([[actions['STAY']]] *(lookahead- len(action_seq_with_stay)))
+                    action_seq_with_stay.extend([[actions['STAY']]] * (lookahead- len(action_seq_with_stay)))
                 action_seq_options.append(np.array(action_seq_with_stay).reshape(len(action_seq_with_stay), 1))
         
         if len(action_seq) < lookahead and 'STAY' in actions:
-            action_seq.extend([[actions['STAY']]] *(lookahead- len(action_seq_with_stay)))
+            action_seq.extend([[actions['STAY']]] *(lookahead- len(action_seq)))
         elif 'STAY' not in actions:
             print('Create policies; We might neeed to implement what to do if the policy < policy_len')
         action_seq_options.append(np.array(action_seq).reshape(len(action_seq), 1))

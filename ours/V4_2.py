@@ -1,8 +1,6 @@
 import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
 from copy import deepcopy
-import pandas as pd
+
 
 from ours.pymdp import utils
 from ours.pymdp import control, inference
@@ -14,7 +12,8 @@ from ours.pymdp.maths import spm_dot
 
 #==== INIT AGENT ====#
 class Ours_V4_2(Agent):
-    def __init__(self, num_obs=2, num_states=2, dim=2, observations=[0,(0,0)], learning_rate_pB=3.0, actions= {'Left':0}, \
+    def __init__(self, num_obs=2, num_states=2, dim=2, observations=[0,(0,0)], lookahead=4, \
+                 learning_rate_pB=3.0, actions= {'Left':0}, \
                  set_stationary_B=True, inference_algo= 'VANILLA') -> None:
         self.agent_state_mapping = {}
         self.pose_mapping = []
@@ -22,10 +21,10 @@ class Ours_V4_2(Agent):
         self.preferred_ob = [-1,-1]
         self.set_stationary_B = set_stationary_B
         self.step_possible_actions = list(self.possible_actions.values())
-        self.linear_policies = True
+        self.lookahead_distance = False #lookahead in number of consecutive steps
 
         observations, agent_params = self.create_agent_params(num_obs=num_obs, num_states=num_states, observations=observations, \
-                            learning_rate_pB=learning_rate_pB, dim=dim, lookahead=4, inference_algo = inference_algo)
+                            learning_rate_pB=learning_rate_pB, dim=dim, lookahead=lookahead, inference_algo = inference_algo)
         super().__init__(**agent_params)
         self.initialisation(observations=observations)
     
@@ -71,42 +70,26 @@ class Ours_V4_2(Agent):
             'use_param_info_gain': False
         }
 
-    def initialisation(self,observations:list=[0,(0,0)], E=None):
+    def initialisation(self,observations:list=[0,(0,0)], linear_policies:bool=True, E=None):
         """ Initialise agent with first current observation and verify that all parameters 
         are adapted for continuous navigation.
         linear_policies(bool): 
         if False: we try all combinaison of actions (exponential n_action^policy_len  -wth policy_len==lookahead-) )
-        if True: We create linear path reaching at a lookahead DISTANCE (not number of consecutive actions) 
+        if True: We create linear path reaching at a lookahead DISTANCE (not number of consecutive actions) or NUM STEPS
         we make it linear 8*policy_len+4 if no 'STAY' actions, else it's polynomial with 8*policy_len^2+12*policy_len+5 In the case of 5 actions.
         It's not linear because of the STAY action that is irregular and set only at the end of a policy.
 
         NOTE:linear_policies=True is only tailored for num_factor==1 and len(num_control)==1 
         """
         
-        if self.linear_policies:
-            policies = create_policies(self.policy_len, self.possible_actions)
-            self.policies = policies
-            assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
-            
-            all_policies = np.vstack(self.policies)
-
-            assert all([n_c >= max_action for (n_c, max_action) in zip(self.num_controls, list(np.max(all_policies, axis =0)+1))]), "Maximum number of actions is not consistent with `num_controls`"
-            # Construct prior over policies (uniform if not specified) 
-            if E is not None:
-                if not isinstance(E, np.ndarray):
-                    raise TypeError(
-                        'E vector must be a numpy array'
-                    )
-                self.E = E
-                assert len(self.E) == len(self.policies), f"Check E vector: length of E must be equal to number of policies: {len(self.policies)}"
-            else:
-                self.E = self._construct_E_prior()
+        if linear_policies:
+            self.init_policies(E)
         self.reset(start_pose=self.pose_mapping[0])
         if self.edge_handling_params["use_BMA"] and hasattr(self, "q_pi_hist"): #This is not compatible with our way of moving
             del self.q_pi_hist
             
         self.inference_params_dict = {'MMP':
-                    {'num_iter': 3, 'grad_descent': True, 'tau': 0.25},
+                    {'num_iter': 6, 'grad_descent': True, 'tau': 0.25},
                     'VANILLA':
                     {'num_iter': 3, 'dF': 1.0, 'dF_tol': 0.001}}
 
@@ -130,7 +113,25 @@ class Ours_V4_2(Agent):
             p_idx = np.argmax(self.A[1][:,np.argmax(qs[0])])
             self.current_pose = self.pose_mapping[p_idx]
             print('updating believed pose given certitude on state:', self.current_pose)
+    
+    def init_policies(self, E=None):
+        policies = create_policies(self.policy_len, self.possible_actions, lookahead_distance=self.lookahead_distance)
+        self.policies = policies
+        assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
         
+        all_policies = np.vstack(self.policies)
+
+        assert all([n_c >= max_action for (n_c, max_action) in zip(self.num_controls, list(np.max(all_policies, axis =0)+1))]), "Maximum number of actions is not consistent with `num_controls`"
+        # Construct prior over policies (uniform if not specified) 
+        if E is not None:
+            if not isinstance(E, np.ndarray):
+                raise TypeError(
+                    'E vector must be a numpy array'
+                )
+            self.E = E
+            assert len(self.E) == len(self.policies), f"Check E vector: length of E must be equal to number of policies: {len(self.policies)}"
+        else:
+            self.E = self._construct_E_prior()
     #==== GET METHODS ====#
     def get_agent_state_mapping(self, x=None,a=None, agent_pose=None)->dict:
         return self.agent_state_mapping
@@ -726,7 +727,7 @@ class Ours_V4_2(Agent):
                 self.pB,
                 E = self.E,
                 gamma = self.gamma,
-                diff_policy_len = self.linear_policies
+                diff_policy_len = self.lookahead_distance
             )
         elif self.inference_algo == "MMP":
             # if qs is None:
@@ -747,7 +748,7 @@ class Ours_V4_2(Agent):
                 F = self.F,
                 E = self.E,
                 gamma = self.gamma,
-                diff_policy_len = self.linear_policies
+                diff_policy_len = self.lookahead_distance
             )
 
         if hasattr(self, "q_pi_hist"):

@@ -10,7 +10,6 @@ from envs.minigrid import GridWorldEnv
 from minigrid_navigation import minigrid_reach_goal, minigrid_exploration
 from ours.V3_3 import Ours_V3_3 
 from ours.V1 import Ours_V1
-from ours.V5 import Ours_V5
 from ours.V4 import Ours_V4
 from ours.V4_2 import Ours_V4_2
 from cscg.cscg import CHMM
@@ -148,10 +147,10 @@ def set_models(possible_actions:dict, rooms:np.ndarray, \
             model = Ours_V3_3(num_obs=2, \
                 num_states=2, observations=observation, \
                     learning_rate_pB=3.0, actions= possible_actions) #dim is still 2 set as default
-    elif 'ours_v4_2' in model_name:
+    elif 'ours_v4_2' in model_name: #LOOKAHEAD : 8
             model = Ours_V4_2(num_obs=2, \
                 num_states=2, observations=observation, \
-                    learning_rate_pB=3.0, actions= possible_actions, inference_algo = flags.inf_algo)
+                    learning_rate_pB=3.0, actions= possible_actions, lookahead=5, inference_algo = flags.inf_algo)
     elif 'ours_v4' in model_name:
             model = Ours_V4(num_obs=2, \
                 num_states=2, observations=observation, \
@@ -162,11 +161,7 @@ def set_models(possible_actions:dict, rooms:np.ndarray, \
             model = Ours_V1(num_obs=2, \
                 num_states=2, observations=[observation[0],start_state], \
                 learning_rate_pB=3.0, actions= possible_actions)
-    # elif 'ours_v5' in model_name:
-    #         model = Ours_V5(num_obs=2, \
-    #             num_states=2, observations=observation, dim=1, \
-    #             learning_rate_pB=3.0, actions= possible_actions)
-            
+
     elif 'cscg' in model_name:
         n_clones = np.ones(n_emissions, dtype=np.int64) * 10
         n_actions = max(list(possible_actions.values()))
@@ -257,6 +252,7 @@ def main(flags):
                     model.goal_oriented_navigation(preferred_ob, inf_algo=flags.inf_algo)
                     if 'ours' in model_name and flags.load_model != 'None':
                         model.reset()
+                    
                     data = minigrid_reach_goal(env, model, possible_actions, model_name, pose, \
                                             flags.max_steps, stop_condition = flags.stop_condition.lower())
                 else:
