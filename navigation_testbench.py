@@ -226,6 +226,10 @@ def main(flags):
                 model_name = flags.model
                 if 'ours_v4' in model_name:
                     model_name+= '_'+ flags.inf_algo
+                    #TODO: REMOVE AFTER TESTS
+                    model.test_display_policy_imagination = True #TEMPORARY FOR TEST PURPOSES
+                    model.sampling_mode=  'marginal'
+                    model.action_selection = 'deterministic'
 
             print('model_name', model_name)
             

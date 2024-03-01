@@ -10,6 +10,14 @@ Already a pro? Just edit this README.md and make it your own. Want to make it ea
 
 ## Tests
 
+ python navigation_testbench.py --load_model results/grid_donut/ours_exploration/ours_v4_2_MMP/ours_v4_2_MMP_2024-02-27-09-32-43/ours_v4_2_MMP.pkl --inf_algo 'MMP' --env grid_donut --model ours_v4_2_MMP --max_steps 15 -p 0 -p 0 --goal 12 --stop_condition goal_reached
+
+
+ python navigation_testbench.py --inf_algo 'MMP' --env grid_donut --model ours_v4_2 --max_steps 2 -p 0 -p 0
+
+
+
+
 
 
 ## Versionning

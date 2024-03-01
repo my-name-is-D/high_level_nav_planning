@@ -76,7 +76,7 @@ class Ours_V4_2(Agent):
         linear_policies(bool): 
         if False: we try all combinaison of actions (exponential n_action^policy_len  -wth policy_len==lookahead-) )
         if True: We create linear path reaching at a lookahead DISTANCE (not number of consecutive actions) or NUM STEPS
-        we make it linear 8*policy_len+4 if no 'STAY' actions, else it's polynomial with 8*policy_len^2+12*policy_len+5 In the case of 5 actions.
+        we make it linear if no 'STAY' actions, else it's polynomial.
         It's not linear because of the STAY action that is irregular and set only at the end of a policy.
 
         NOTE:linear_policies=True is only tailored for num_factor==1 and len(num_control)==1 
@@ -713,22 +713,39 @@ class Ours_V4_2(Agent):
             qs = self.qs
 
         if self.inference_algo == "VANILLA":
-            
-            q_pi, G = update_posterior_policies(
-                qs,
-                self.A,
-                self.B,
-                self.C,
-                self.policies,
-                self.use_utility,
-                self.use_states_info_gain,
-                self.use_param_info_gain,
-                self.pA,
-                self.pB,
-                E = self.E,
-                gamma = self.gamma,
-                diff_policy_len = self.lookahead_distance
-            )
+            if self.test_display_policy_imagination:
+                q_pi, G, self.G_per_actions = update_posterior_policies_test(
+                    qs,
+                    self.A,
+                    self.B,
+                    self.C,
+                    self.policies,
+                    self.use_utility,
+                    self.use_states_info_gain,
+                    self.use_param_info_gain,
+                    self.pA,
+                    self.pB,
+                    E = self.E,
+                    gamma = self.gamma,
+                    diff_policy_len = self.lookahead_distance
+                )
+            else:
+                q_pi, G = update_posterior_policies(
+                    qs,
+                    self.A,
+                    self.B,
+                    self.C,
+                    self.policies,
+                    self.use_utility,
+                    self.use_states_info_gain,
+                    self.use_param_info_gain,
+                    self.pA,
+                    self.pB,
+                    E = self.E,
+                    gamma = self.gamma,
+                    diff_policy_len = self.lookahead_distance
+                )
+
         elif self.inference_algo == "MMP":
             # if qs is None:
             #     future_qs_seq = self.get_future_qs()
@@ -782,13 +799,19 @@ class Ours_V4_2(Agent):
             policies =  self.policies
             q_pi = self.q_pi
 
+        if self.test_display_policy_imagination:
+            self.poses_efe = sample_action_test(self.G_per_actions, policies, self.possible_actions)
+        
         if self.sampling_mode == "marginal":
             action = control.sample_action(
                 q_pi, policies, self.num_controls, action_selection = self.action_selection, alpha = self.alpha
             )
         elif self.sampling_mode == "full":
             action = control.sample_policy(q_pi, policies, self.num_controls,
-                                           action_selection=self.action_selection, alpha=self.alpha)
+                                        action_selection=self.action_selection, alpha=self.alpha)
+
+      
+    
 
         self.action = action
 

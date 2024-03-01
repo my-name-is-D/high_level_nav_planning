@@ -129,6 +129,9 @@ def generate_csv_report(run_logs, flags, store_path):
     if 'frames' in run_logs.keys():
         del run_logs['frames']
     
+    if 'efe_frames' in run_logs.keys():
+        del run_logs['efe_frames']
+
     if 'train_progression' in run_logs.keys():
         del run_logs['train_progression']
 
@@ -181,6 +184,19 @@ def generate_plot_report(run_logs, env, store_path):
     # gif_path = store_path / "navigate.gif"
     # imageio.mimsave(gif_path, run_logs["frames"], 'GIF', duration=500, loop=0)
 
+    #EFE POSES VISUALISATION
+    if 'efe_frames' in run_logs:
+        imgs_path = store_path/ 'efe_imgs'
+        imgs_path.mkdir(exist_ok=True, parents=True)
+        for i in range(len(run_logs["efe_frames"])):
+            img_name = 'step_'+str(i)+'.jpg'
+            imageio.imwrite(imgs_path / img_name, run_logs['efe_frames'][i])
+            # image = imageio.imread(store_path /name)
+            # writer.append_data(image)
+
+        gif_path = store_path / "efe_frames.gif"
+        imageio.mimsave(gif_path, [imageio.imread(f"{store_path}/efe_imgs/step_{i}.jpg") for i in range(len(run_logs['efe_frames']))], 'GIF', duration=0.5, loop=1)
+
     # Entropy plot
     state_beliefs = [log["qs"] for log in run_logs["agent_info"]]
     entropies = [entropy(s) for s in state_beliefs]
@@ -230,18 +246,46 @@ def plot_observations_and_states(env, pose, agent_state_map=None):
         print(visualise_position)
 
 #==== MAP PLOTS ====#
+
+def get_efe_frame(env, pose, action_marginals):
+    policy_len = action_marginals.shape[0]//2
+
+    fig = plt.figure(1)
+    ax = plot_map(env.rooms, cmap=env.rooms_colour_map, show = False, alpha=0.2)
+
+    # Create a mask to apply the filter only to the specified region
+    mask = np.zeros_like(env.rooms, dtype=float)
+
+    start_x = max(policy_len - pose[0], 0)
+    end_x = min(policy_len + (mask.shape[0]-pose[0]), mask.shape[0]+policy_len)
+    start_y = max(policy_len - pose[1], 0)
+    end_y = min(policy_len + (mask.shape[1]-pose[1]), mask.shape[1]+policy_len)
+
+    mask_start_x = max(0, pose[0] - policy_len)
+    mask_end_x = min(pose[0] + policy_len+1, mask.shape[0])
+    mask_start_y = max(0, pose[1] - policy_len)
+    mask_end_y = min(pose[1] + policy_len+1, mask.shape[1])
+
+    mask[mask_start_x:mask_end_x, mask_start_y:mask_end_y] = action_marginals[start_x:end_x, start_y:end_y]
+
+    ax.imshow(mask, cmap='binary', alpha=1,  zorder=1)
+    ax.text(pose[1], pose[0], str('x'), ha='center', va='center', color='black', fontsize=30, alpha=0.8)
     
+    return convert_matplot_to_image(fig)
+
 def get_frame(env, pose ):
     fig = plt.figure(1)
     ax = plot_map(env.rooms, cmap=env.rooms_colour_map, show = False)
     ax.text(pose[1], pose[0], str('x'), ha='center', va='center', color='black', fontsize=30)
-    
-    fig.canvas.draw()
 
+    return convert_matplot_to_image(fig)
+
+def convert_matplot_to_image(fig):
+    fig.canvas.draw()
     # Convert figure to RGB byte string
     image = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
     image = image.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    ax.clear() 
+    
     plt.close(fig) 
     image = imageio.core.util.Image(image)
     # Save axes to BytesIO buffer
@@ -252,13 +296,12 @@ def get_frame(env, pose ):
     # # Read image data from BytesIO buffer
     # image = imageio.imread(buffer)
     # textvar.set_visible(False)
-    
     return image
 
-def plot_map(rooms, cmap, show = True):
+def plot_map(rooms, cmap, show = True, alpha=1.0):
     fig = plt.figure(1)
     ax = plt.subplot(1,1,1)
-    ax.imshow(rooms, cmap=cmap, alpha=1.0)
+    ax.imshow(rooms, cmap=cmap, alpha=alpha, zorder=2)
     # Set ticks to show only integer values
     ax.set_xticks(np.arange(rooms.shape[1]))
     ax.set_yticks(np.arange(rooms.shape[0]))
