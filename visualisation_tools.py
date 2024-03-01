@@ -11,6 +11,7 @@ import copy
 from matplotlib import cm, colors
 import matplotlib.collections as mcoll
 import matplotlib.path as mpath
+
 # import io
 import imageio
 import bisect
@@ -251,7 +252,7 @@ def get_efe_frame(env, pose, action_marginals):
     policy_len = action_marginals.shape[0]//2
 
     fig = plt.figure(1)
-    ax = plot_map(env.rooms, cmap=env.rooms_colour_map, show = False, alpha=0.2)
+    ax = plot_map(env.rooms, cmap=env.rooms_colour_map, show = False, alpha=0.15)
 
     # Create a mask to apply the filter only to the specified region
     mask = np.zeros_like(env.rooms, dtype=float)
@@ -267,8 +268,10 @@ def get_efe_frame(env, pose, action_marginals):
     mask_end_y = min(pose[1] + policy_len+1, mask.shape[1])
 
     mask[mask_start_x:mask_end_x, mask_start_y:mask_end_y] = action_marginals[start_x:end_x, start_y:end_y]
+    cmap = plt.cm.get_cmap('binary')  # Example: using the 'viridis' colormap
 
-    ax.imshow(mask, cmap='binary', alpha=1,  zorder=1)
+    norm = colors.Normalize(vmin=0, vmax=15)
+    ax.imshow(mask, alpha=1,  cmap=cmap, norm=norm, zorder=1)
     ax.text(pose[1], pose[0], str('x'), ha='center', va='center', color='black', fontsize=30, alpha=0.8)
     
     return convert_matplot_to_image(fig)

@@ -410,7 +410,6 @@ def update_posterior_policies_test(
     E = None,
     gamma=16.0,
     diff_policy_len = False,
-    test = False,
 ):
     """
     Update posterior beliefs about policies by computing expected free energy of each policy and integrating that
@@ -505,7 +504,7 @@ def update_posterior_policies_test(
                 if diff_policy_len : 
                     param_info_gain = info_gain/ policy_length
                 G[idx] +=  param_info_gain
-        G_per_actions[idx] = utility_term_per_action + info_gain_per_action
+        G_per_actions[idx] = -utility_term_per_action/10 + info_gain_per_action
     
     q_pi =  maths.softmax(G * gamma + lnE)    
     # G_per_actions = utils.norm_dist_obj_arr(G_per_actions) #normed in 
@@ -658,28 +657,14 @@ def sample_action_test(G_per_actions, policies, actions):
         ``list`` that stores each policy as a 2D array in ``policies[p_idx]``. Shape of ``policies[p_idx]`` 
         is ``(num_timesteps, num_factors)`` where ``num_timesteps`` is the temporal
         depth of the policy and ``num_factors`` is the number of control factors.
-    num_controls: ``list`` of ``int``
-        ``list`` of the dimensionalities of each control state factor.
-    action_selection: ``str``, default "deterministic"
-        String indicating whether whether the selected action is chosen as the maximum of the posterior over actions,
-        or whether it's sampled from the posterior marginal over actions
-    alpha: float, default 16.0
-        Action selection precision -- the inverse temperature of the softmax that is used to scale the 
-        action marginals before sampling. This is only used if ``action_selection`` argument is "stochastic"
-    seed: ``int``, default None
-        The seed can be set to control the random sampling that occurs when ``action_selection`` is "deterministic" but there are more than one actions with the same maximum posterior probability.
-
 
     Returns
     ----------
-    selected_policy: 1D ``numpy.ndarray``
-        Vector containing the indices of the actions for each control factor
+    
     p_actions: ``numpy.ndarray`` of dtype object
         Marginal posteriors over actions, after softmaxing and scaling with action precision. This distribution will be used to sample actions,
         if``action_selection`` argument is "stochastic"
     """
-
-    #need actions
 
 
     policy_length = len(policies[0]) #assuming all same lengths

@@ -165,7 +165,7 @@ def minigrid_reach_goal(env, model, actions_dict, model_name, pose, max_steps, s
     """
     agent_infos = []
     actions = []
-    
+    data = {}
     p_obs = [pose]
     ob = env.get_ob_given_p(pose)
     c_obs = [ob]
@@ -187,7 +187,14 @@ def minigrid_reach_goal(env, model, actions_dict, model_name, pose, max_steps, s
                 ours_infer_position(model, observation, action, next_possible_actions)
             if 'cscg' in model_name:
                 action, agent_info = cscg_action_decision(model, observation, next_possible_actions)
-                
+            
+            if hasattr(model, 'test_display_policy_imagination') and model.test_display_policy_imagination ==True: 
+                if not 'poses_efe' in data:
+                    data['poses_efe'] = []
+                    data['efe_frames'] = []
+                data['poses_efe'].append(str(model.poses_efe))
+                data['efe_frames'].append(get_efe_frame(env, pose, model.poses_efe))
+
             obs, _,_,_ = env.step(action, pose)
             print('action', action, 'colour', obs[0], 'pose', obs[1])
             ob, pose = obs
@@ -227,16 +234,15 @@ def minigrid_reach_goal(env, model, actions_dict, model_name, pose, max_steps, s
             break
     #We want the same amount of actions than observations.
     actions = np.insert(actions, 0, -1)
-    return  {
-        "steps": [*range(t+1)],
-        "c_obs": c_obs,
-        "actions": actions,
-        "poses": p_obs,
-        'stop_condition_' + str(stop_condition): stop,
-        "agent_info": agent_infos,
-        "frames":frames,
-        "error":error_message,
-    }
+    data["steps"]= [*range(t+1)]
+    data["c_obs"]= c_obs
+    data["actions"]= actions
+    data["poses"]= p_obs
+    data['stop_condition_' + str(stop_condition)]= stop
+    data["agent_info"]= agent_infos
+    data["frames"]=frames
+    data["error"]=error_message
+    return  data
 
 
 #======================= EXPLO METHODS ===================================#
