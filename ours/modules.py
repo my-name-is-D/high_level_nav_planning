@@ -604,18 +604,30 @@ def update_A_matrix_size(A, add_ob=0, add_state=0, null_proba = True):
 
 
 #==== POLICY GENERATION ====#
-def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0), lookahead_distance:bool=False)-> list:
+def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0), lookahead_distance:bool=False, simple_paths:bool=True)-> list:
     ''' Given current pose, and the goals poses
     we want to explore or reach those goals, 
     generate policies going around in a square perimeter. 
-    Either just forward (goals), or all around (explore)'''
-
-    goal_poses = define_policies_objectives(current_pose, lookahead)
-    policies_lists = []
-    #get all the actions leading to the endpoints
-    for endpoint in goal_poses:
-        action_seq_options = define_policies_to_goal(current_pose, endpoint, actions, lookahead, lookahead_distance)
-        policies_lists.extend(action_seq_options)
+    Parameters
+    lookahead(int): how far ahead should we imagine (either steps or policy_length)
+    actions(dict): authorised actions
+    current_pose(list): where we start from (default: (0,0))
+    lookahead_distance(bool): do we consider the lookahead as a dist (True) or num of consecutive steps (False)
+    simple_paths(bool): by default the paths have 1 turn max, if we want more complex paths, quadrating full area in number of steps max, set to True
+    
+    Note simple_paths= False is not compatible with lookahead_distance=True (will be set back to false), to avoid long computation time.
+    
+    '''
+    if simple_paths:
+        goal_poses = define_policies_objectives(current_pose, lookahead)
+        policies_lists = []
+        #get all the actions leading to the endpoints
+        for endpoint in goal_poses:
+            action_seq_options = define_policies_to_goal(current_pose, endpoint, actions, lookahead, lookahead_distance)
+            policies_lists.extend(action_seq_options)
+    else:
+        #Is used for a 360degree squared exploration area range
+        policies_lists = generate_paths_quadrating_area(lookahead,actions)
 
     if 'STAY' in actions:
         policies_lists.append(np.array([[actions['STAY']]]*lookahead))
@@ -656,7 +668,7 @@ def define_policies_to_goal(start_pose:list, end_pose:list, actions:dict, lookah
     dx,dy = abs(int(start_pose[0] - end_pose[0])), abs(int(start_pose[1] - end_pose[1])) # destination cell
 
     #If we want to explore, we want a grid path coverage (squared)
-    paths = exploration_goal_square(dx, dy)
+    paths = L_shaped_paths(dx, dy)
         
     action_seq_options = []
 
@@ -700,7 +712,7 @@ def define_policies_to_goal(start_pose:list, end_pose:list, actions:dict, lookah
 
     return action_seq_options
 
-def exploration_goal_square(dx, dy):
+def L_shaped_paths(dx, dy):
     '''
     Create 1 path going to given dx for each y latitude and vice versa for dy. 
     This limit the path generation to half (opposing sides of the starting agent position) 
@@ -732,8 +744,51 @@ def exploration_goal_square(dx, dy):
         
     return paths
 
+def visited_pose(position, path):
+    return position in path
 
+def generate_paths_quadrating_area(lookahead, actions_dict):
+    paths = [[[0, 0]]] 
+    action_paths = [[]]
+    
+    # Define the allowed motions 
+    # (doesn't matter if doesn't correspond to actions_dict, paths are symmetrically created anyway)
+    allowed_actions = {'UP': [1, 0], 'DOWN': [-1, 0], 'RIGHT': [0, 1], 'LEFT': [0, -1]}
+    
+    def generate_paths_recursively(path, action_path):
+        if len(path) == lookahead + 1:
+            paths.append(path[:])
+            action_paths.append(np.array(action_path).reshape(len(action_path), 1))
+            return 
+        
+        for action, direction in allowed_actions.items():
+            action_value = actions_dict[action]
+            new_position = [path[-1][0] + direction[0], path[-1][1] + direction[1]]
+            
+            if not visited_pose(new_position, path):
+                new_path = path.copy()
+                new_action_path = action_path.copy()
+                
+                new_path.append(new_position)
+                new_action_path.append(action_value) 
+               
+                if 'STAY' in actions_dict and len(new_path) < lookahead+1: #current pose is in path
+                    new_path_wt_stay = new_path.copy()
+                    new_action_path_wt_stay = new_action_path.copy()
 
+                    new_path_wt_stay.append(new_path_wt_stay[-1])
+                    new_action_path_wt_stay.append(actions_dict['STAY'])
+                    if len(new_path_wt_stay) < lookahead +1:
+                        new_path_wt_stay.extend([new_path_wt_stay[-1]] * (lookahead+1- len(new_path_wt_stay)))
+                        new_action_path_wt_stay.extend([actions_dict['STAY']] * (lookahead- len(new_action_path_wt_stay)))
+                    paths.append(new_path_wt_stay[:]) 
+                    action_paths.append(np.array(new_action_path_wt_stay).reshape(len(new_action_path_wt_stay), 1))        
+                generate_paths_recursively(new_path,new_action_path)
+    
+    # Start generating paths recursively
+    generate_paths_recursively(paths[0], action_paths[0])
+    
+    return action_paths[1:] #,paths[1:]
 
 def from_int_to_str(policy):
     str_policy = []
@@ -750,3 +805,4 @@ def from_int_to_str(policy):
             a = '4'
         str_policy.append(a)
     return str_policy
+

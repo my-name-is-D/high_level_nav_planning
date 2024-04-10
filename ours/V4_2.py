@@ -22,6 +22,7 @@ class Ours_V4_2(Agent):
         self.set_stationary_B = set_stationary_B
         self.step_possible_actions = list(self.possible_actions.values())
         self.lookahead_distance = False #lookahead in number of consecutive steps
+        self.simple_paths = True #L shaped paths, less computationally extensive than full coverage paths
 
         observations, agent_params = self.create_agent_params(num_obs=num_obs, num_states=num_states, observations=observations, \
                             learning_rate_pB=learning_rate_pB, dim=dim, lookahead=lookahead, inference_algo = inference_algo)
@@ -76,12 +77,12 @@ class Ours_V4_2(Agent):
         linear_policies(bool): 
         if False: we try all combinaison of actions (exponential n_action^policy_len  -wth policy_len==lookahead-) )
         if True: We create linear path reaching at a lookahead DISTANCE (not number of consecutive actions) or NUM STEPS
-        we make it linear 8*policy_len+4 if no 'STAY' actions, else it's polynomial with 8*policy_len^2+12*policy_len+5 In the case of 5 actions.
+        we make it linear if no 'STAY' actions, else it's polynomial.
         It's not linear because of the STAY action that is irregular and set only at the end of a policy.
 
         NOTE:linear_policies=True is only tailored for num_factor==1 and len(num_control)==1 
         """
-        
+      
         if linear_policies:
             self.init_policies(E)
         self.reset(start_pose=self.pose_mapping[0])
@@ -115,7 +116,7 @@ class Ours_V4_2(Agent):
             print('updating believed pose given certitude on state:', self.current_pose)
     
     def init_policies(self, E=None):
-        policies = create_policies(self.policy_len, self.possible_actions, lookahead_distance=self.lookahead_distance)
+        policies = create_policies(self.policy_len, self.possible_actions, lookahead_distance=self.lookahead_distance,simple_paths= self.simple_paths)
         self.policies = policies
         assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
         
@@ -132,6 +133,7 @@ class Ours_V4_2(Agent):
             assert len(self.E) == len(self.policies), f"Check E vector: length of E must be equal to number of policies: {len(self.policies)}"
         else:
             self.E = self._construct_E_prior()
+
     #==== GET METHODS ====#
     def get_agent_state_mapping(self, x=None,a=None, agent_pose=None)->dict:
         return self.agent_state_mapping
