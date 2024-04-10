@@ -82,8 +82,8 @@ def save_transitions_plots(model, model_name, actions, desired_state_mapping, ru
     #print('cmap', cmap(0))
     if cmap(0) == (0.99609375, 0.99609375, 0.99609375, 1.0): #if white erase it from color list
         # Create a new colormap excluding the first color
-        cmap = colors.ListedColormap([cmap.colors[i] for i in range(1, cmap.N)])
-        
+        cmap = colors.ListedColormap([cmap.colors[i] for i in range(1, cmap.N+1)])
+
     
     if 'pose' in model_name:
         poses_idx = model.from_pose_to_idx(run_logs['poses'])
