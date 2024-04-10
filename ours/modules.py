@@ -282,7 +282,7 @@ def update_state_likelihood_dirichlet(
 
     for factor in factors:
         dfdb = maths.spm_cross(qs[factor], qs_prev[factor])
-        print('update_B: a', actions[factor],'qs[factor]',qs[factor].round(3), 'qs_prev[factor]',qs_prev[factor].round(3))
+        #print('update_B: a', actions[factor],'qs[factor]',qs[factor].round(3), 'qs_prev[factor]',qs_prev[factor].round(3))
         # print('dfdb',dfdb)
         dfdb *= (B[factor][:, :, int(actions[factor])] > 0).astype("float")
         qB[factor][:,:,int(actions[factor])] += (lr*dfdb)
@@ -479,6 +479,8 @@ def update_posterior_policies_test(
         
         if use_utility:
             utility_term, utility_term_per_action = calc_expected_utility_test(qo_pi, C)
+            # print('policy', from_int_to_str(policy))
+            # print('utility_term_per_action', utility_term_per_action)
             if diff_policy_len : 
                 utility_term = utility_term/ policy_length
             G[idx] +=  utility_term
@@ -504,7 +506,7 @@ def update_posterior_policies_test(
                 if diff_policy_len : 
                     param_info_gain = info_gain/ policy_length
                 G[idx] +=  param_info_gain
-        G_per_actions[idx] = -utility_term_per_action/10 + info_gain_per_action
+        G_per_actions[idx] = utility_term_per_action + info_gain_per_action
     
     q_pi =  maths.softmax(G * gamma + lnE)    
     # G_per_actions = utils.norm_dist_obj_arr(G_per_actions) #normed in 
@@ -644,7 +646,99 @@ def update_posterior_policies_full(
     
     return q_pi, G
 
-def sample_action_test(G_per_actions, policies, actions):
+
+def update_posterior_policies_full_test(
+    qs_seq_pi,
+    A,
+    B,
+    C,
+    policies,
+    use_utility=True,
+    use_states_info_gain=True,
+    use_param_info_gain=False,
+    prior=None,
+    pA=None,
+    pB=None,
+    F = None,
+    E = None,
+    gamma=16.0,
+    diff_policy_len = False
+):  
+    """
+    Update posterior beliefs about policies by computing expected free energy of each policy and integrating that
+    with the variational free energy of policies ``F`` and prior over policies ``E``. This is intended to be used in conjunction
+    with the ``update_posterior_states_full`` method of ``inference.py``, since the full posterior over future timesteps, under all policies, is
+    assumed to be provided in the input array ``qs_seq_pi``.
+
+    """
+
+    # num_obs, num_states, num_modalities, num_factors = utils.get_model_dimensions(A, B)
+    
+    num_policies = len(policies)
+
+   
+
+    # horizon = len(qs_seq_pi[0])
+    # num_policies = len(qs_seq_pi)
+    # qo_seq = utils.obj_array(horizon)
+    # for t in range(horizon):
+    #     qo_seq[t] = utils.obj_array_zeros(num_obs)
+
+    # initialise expected observations
+    # qo_seq_pi = utils.obj_array(num_policies)
+
+    # initialize (negative) expected free energies for all policies
+    G = np.zeros(num_policies)
+    G_per_actions = np.zeros(num_policies,  dtype=object)
+    if F is None:
+        F =  maths.spm_log_single(np.ones(num_policies) / num_policies)
+    
+    if E is None:
+        lnE =  maths.spm_log_single(np.ones(num_policies) / num_policies)
+    else:
+        lnE = maths.spm_log_single(E) 
+
+
+    for p_idx, policy in enumerate(policies):
+        policy_length = len(policy)
+
+        qs_pi = control.get_expected_states(qs_seq_pi, B, policy)
+        qo_pi = control.get_expected_obs(qs_pi, A)
+        # str_p = from_int_to_str(policy)
+        utility_term_per_action = utils.obj_array_zeros([len(policy)])[0]
+        info_gain_per_action = utils.obj_array_zeros([len(policy)])[0]
+
+        if use_utility:
+            utility_term, utility_term_per_action = calc_expected_utility_test(qo_pi, C)
+            if diff_policy_len : 
+                utility_term = utility_term/ policy_length
+
+            G[p_idx] +=  utility_term
+            
+        if use_states_info_gain:
+            
+            info_gain, info_gain_per_action =  calc_states_info_gain_test(A, qs_pi)
+            if diff_policy_len : 
+                info_gain = info_gain/ policy_length
+            G[p_idx] += info_gain
+        if use_param_info_gain:
+            if pA is not None:
+                param_info_gain = control.calc_pA_info_gain(pA, qo_pi, qs_pi)
+                if diff_policy_len : 
+                    param_info_gain = param_info_gain/ policy_length
+                G[p_idx] += param_info_gain
+
+            if pB is not None:
+                param_info_gain = control.calc_pB_info_gain(pB, qs_pi, qs_seq_pi, policy)
+                if diff_policy_len : 
+                    param_info_gain = param_info_gain/ policy_length
+                G[p_idx] += param_info_gain
+        G_per_actions[p_idx] = utility_term_per_action + info_gain_per_action
+
+    q_pi = maths.softmax(G * gamma - F + lnE)
+    
+    return q_pi, G, G_per_actions
+def sample_action_test(G_per_actions, q_pi, policies, actions):
     
     """
     Computes the marginal posterior over actions and then samples an action from it, one action per control factor.
@@ -665,19 +759,70 @@ def sample_action_test(G_per_actions, policies, actions):
         Marginal posteriors over actions, after softmaxing and scaling with action precision. This distribution will be used to sample actions,
         if``action_selection`` argument is "stochastic"
     """
-
-
+    # for i, arr_i in enumerate(G_per_actions):
+    #     print('before before', arr_i)
+    #     G_per_actions[i] = -np.exp(-arr_i)
+    #     print('after after', G_per_actions[i])
+    # G_per_actions = softmax_obj_arr_wt_max(G_per_actions)
+    # # G_per_actions = 1/ G_per_actions
+    # # for i, arr_i in enumerate(G_per_actions):
+    # #     print('before', arr_i)
+    # #     G_per_actions[i] = -np.log2(arr_i)
+    # #     print('after', G_per_actions[i])
     policy_length = len(policies[0]) #assuming all same lengths
+    # print('agent lookahead sample action_test', policy_length)
     action_marginals = np.zeros((policy_length*2+1, policy_length*2+1))
 
-    # weight each action according to its integrated posterior probability under all policies at the current timestep
+    # # weight each action according to its integrated posterior probability under all policies at the current timestep
+    # for pol_idx, policy in enumerate(policies):
+    #     pose = [policy_length, policy_length]
+    #     for action_idx, action in enumerate(policy):
+    #         if int(action) == 4:
+    #             continue
+    #         pose = next_p_given_a(pose, actions, action)
+    #         action_marginals[pose[0]][pose[1]] += G_per_actions[pol_idx][action_idx]
+    #         if pose[0] == 4 and pose[1]== 4:
+    #             print('action',action, 'G', G_per_actions[pol_idx][action_idx])
+    #             print('policy',policy, G_per_actions[pol_idx])
+    #             print('action_marginals[pose[0]][pose[1]]', action_marginals[pose[0]][pose[1]])
+    # action_marginals = (action_marginals/5) #*10/2
+    
+    
+    #TEST2
     for pol_idx, policy in enumerate(policies):
         pose = [policy_length, policy_length]
         for action_idx, action in enumerate(policy):
+            # if int(action) == 4:
+            #     continue
             pose = next_p_given_a(pose, actions, action)
-            action_marginals[pose[0]][pose[1]] += G_per_actions[pol_idx][action_idx]
-
+            action_marginals[pose[0]][pose[1]] += q_pi[pol_idx]
+            # if pose[0] == 4 and pose[1]== 4:
+            #     print('action',action, 'G', G_per_actions[pol_idx][action_idx])
+            #     print('policy',policy, q_pi[pol_idx], G_per_actions[pol_idx])
+            #     print('action_marginals[pose[0]][pose[1]]', action_marginals[pose[0]][pose[1]])
+    
+    
+    action_marginals = action_marginals * 15
     return action_marginals
+
+def softmax_wt_max(dist, max):
+    """ 
+    Computes the softmax function on a set of values
+    """
+
+    output = dist - max
+    output = np.exp(output)
+    output = output / np.sum(output, axis=0)
+    return output
+
+def softmax_obj_arr_wt_max(arr):
+
+    output = utils.obj_array(len(arr))
+    max = np.max(list(arr))
+    for i, arr_i in enumerate(arr):
+        output[i] = softmax_wt_max(arr_i,max)
+    
+    return output
 #==== Update A and B ====#
 
 def set_stationary(mat, idx=-1):
@@ -753,18 +898,30 @@ def update_A_matrix_size(A, add_ob=0, add_state=0, null_proba = True):
 
 
 #==== POLICY GENERATION ====#
-def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0), lookahead_distance:bool=False)-> list:
+def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0), lookahead_distance:bool=False, simple_paths:bool=True)-> list:
     ''' Given current pose, and the goals poses
     we want to explore or reach those goals, 
     generate policies going around in a square perimeter. 
-    Either just forward (goals), or all around (explore)'''
-
-    goal_poses = define_policies_objectives(current_pose, lookahead)
-    policies_lists = []
-    #get all the actions leading to the endpoints
-    for endpoint in goal_poses:
-        action_seq_options = define_policies_to_goal(current_pose, endpoint, actions, lookahead, lookahead_distance)
-        policies_lists.extend(action_seq_options)
+    Parameters
+    lookahead(int): how far ahead should we imagine (either steps or policy_length)
+    actions(dict): authorised actions
+    current_pose(list): where we start from (default: (0,0))
+    lookahead_distance(bool): do we consider the lookahead as a dist (True) or num of consecutive steps (False)
+    simple_paths(bool): by default the paths have 1 turn max, if we want more complex paths, quadrating full area in number of steps max, set to True
+    
+    Note simple_paths= False is not compatible with lookahead_distance=True (will be set back to false), to avoid long computation time.
+    
+    '''
+    if simple_paths:
+        goal_poses = define_policies_objectives(current_pose, lookahead)
+        policies_lists = []
+        #get all the actions leading to the endpoints
+        for endpoint in goal_poses:
+            action_seq_options = define_policies_to_goal(current_pose, endpoint, actions, lookahead, lookahead_distance)
+            policies_lists.extend(action_seq_options)
+    else:
+        #Is used for a 360degree squared exploration area range
+        policies_lists = generate_paths_quadrating_area(lookahead,actions)
 
     if 'STAY' in actions:
         policies_lists.append(np.array([[actions['STAY']]]*lookahead))
@@ -805,7 +962,7 @@ def define_policies_to_goal(start_pose:list, end_pose:list, actions:dict, lookah
     dx,dy = abs(int(start_pose[0] - end_pose[0])), abs(int(start_pose[1] - end_pose[1])) # destination cell
 
     #If we want to explore, we want a grid path coverage (squared)
-    paths = exploration_goal_square(dx, dy)
+    paths = L_shaped_paths(dx, dy)
         
     action_seq_options = []
 
@@ -849,7 +1006,7 @@ def define_policies_to_goal(start_pose:list, end_pose:list, actions:dict, lookah
 
     return action_seq_options
 
-def exploration_goal_square(dx, dy):
+def L_shaped_paths(dx, dy):
     '''
     Create 1 path going to given dx for each y latitude and vice versa for dy. 
     This limit the path generation to half (opposing sides of the starting agent position) 
@@ -881,8 +1038,51 @@ def exploration_goal_square(dx, dy):
         
     return paths
 
+def visited_pose(position, path):
+    return position in path
 
+def generate_paths_quadrating_area(lookahead, actions_dict):
+    paths = [[[0, 0]]] 
+    action_paths = [[]]
+    
+    # Define the allowed motions 
+    # (doesn't matter if doesn't correspond to actions_dict, paths are symmetrically created anyway)
+    allowed_actions = {'UP': [1, 0], 'DOWN': [-1, 0], 'RIGHT': [0, 1], 'LEFT': [0, -1]}
+    
+    def generate_paths_recursively(path, action_path):
+        if len(path) == lookahead + 1:
+            paths.append(path[:])
+            action_paths.append(np.array(action_path).reshape(len(action_path), 1))
+            return 
+        
+        for action, direction in allowed_actions.items():
+            action_value = actions_dict[action]
+            new_position = [path[-1][0] + direction[0], path[-1][1] + direction[1]]
+            
+            if not visited_pose(new_position, path):
+                new_path = path.copy()
+                new_action_path = action_path.copy()
+                
+                new_path.append(new_position)
+                new_action_path.append(action_value) 
+               
+                if 'STAY' in actions_dict and len(new_path) < lookahead+1: #current pose is in path
+                    new_path_wt_stay = new_path.copy()
+                    new_action_path_wt_stay = new_action_path.copy()
 
+                    new_path_wt_stay.append(new_path_wt_stay[-1])
+                    new_action_path_wt_stay.append(actions_dict['STAY'])
+                    if len(new_path_wt_stay) < lookahead +1:
+                        new_path_wt_stay.extend([new_path_wt_stay[-1]] * (lookahead+1- len(new_path_wt_stay)))
+                        new_action_path_wt_stay.extend([actions_dict['STAY']] * (lookahead- len(new_action_path_wt_stay)))
+                    paths.append(new_path_wt_stay[:]) 
+                    action_paths.append(np.array(new_action_path_wt_stay).reshape(len(new_action_path_wt_stay), 1))        
+                generate_paths_recursively(new_path,new_action_path)
+    
+    # Start generating paths recursively
+    generate_paths_recursively(paths[0], action_paths[0])
+    
+    return action_paths[1:] #,paths[1:]
 
 def from_int_to_str(policy):
     str_policy = []
@@ -949,8 +1149,7 @@ def calc_expected_utility_test(qo_pi, C):
             lnC = maths.spm_log_single(C_prob[modality][:, t])
             eu = qo_pi[t][modality].dot(lnC)
             expected_util += eu
-            expected_util_actions[t] = qo_pi[t][modality].dot(lnC)
-            
+            expected_util_actions[t] += eu
 
     return expected_util, expected_util_actions
 
@@ -984,6 +1183,6 @@ def calc_states_info_gain_test(A, qs_pi):
     for t in range(n_steps):
         ss =  maths.spm_MDP_G(A, qs_pi[t])
         states_surprise += ss
-        states_surprise_actions[t] = ss
+        states_surprise_actions[t] += ss
 
     return states_surprise, states_surprise_actions

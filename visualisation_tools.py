@@ -36,7 +36,7 @@ def create_custom_cmap(custom_colors):
 
 def colorline(
     x, y, z=None, cmap=plt.get_cmap('Greys'), norm=plt.Normalize(0.0, 1.0),
-        linewidth=3, alpha=1.0, ax= None):
+        linewidth=3, alpha=1.0, ax= None, zorder=3):
     """
     http://nbviewer.ipython.org/github/dpsanders/matplotlib-examples/blob/master/colorline.ipynb
     http://matplotlib.org/examples/pylab_examples/multicolored_line.html
@@ -57,7 +57,7 @@ def colorline(
 
     segments = make_segments(x, y)
     lc = mcoll.LineCollection(segments, array=z, cmap=cmap, norm=norm,
-                              linewidth=linewidth, alpha=alpha)
+                              linewidth=linewidth, alpha=alpha, zorder=zorder)
     if ax is None:
         ax = plt.gca()
     ax.add_collection(lc)
@@ -79,6 +79,12 @@ def make_segments(x, y):
 #==== SAVING PLOTS ====#
 
 def save_transitions_plots(model, model_name, actions, desired_state_mapping, run_logs, cmap,store_path):
+    #print('cmap', cmap(0))
+    if cmap(0) == (0.99609375, 0.99609375, 0.99609375, 1.0): #if white erase it from color list
+        # Create a new colormap excluding the first color
+        cmap = colors.ListedColormap([cmap.colors[i] for i in range(1, cmap.N)])
+        
+    
     if 'pose' in model_name:
         poses_idx = model.from_pose_to_idx(run_logs['poses'])
         observations = np.array([np.array([c, p], dtype=object) for c, p in zip(run_logs['c_obs'], poses_idx)])
@@ -189,6 +195,7 @@ def generate_plot_report(run_logs, env, store_path):
     if 'efe_frames' in run_logs:
         imgs_path = store_path/ 'efe_imgs'
         imgs_path.mkdir(exist_ok=True, parents=True)
+        
         for i in range(len(run_logs["efe_frames"])):
             img_name = 'step_'+str(i)+'.jpg'
             imageio.imwrite(imgs_path / img_name, run_logs['efe_frames'][i])
@@ -252,7 +259,7 @@ def get_efe_frame(env, pose, action_marginals):
     policy_len = action_marginals.shape[0]//2
 
     fig = plt.figure(1)
-    ax = plot_map(env.rooms, cmap=env.rooms_colour_map, show = False, alpha=0.15)
+    ax = plot_map(env.rooms, cmap=env.rooms_colour_map, show = False, alpha=0.12)
 
     # Create a mask to apply the filter only to the specified region
     mask = np.zeros_like(env.rooms, dtype=float)
@@ -270,7 +277,7 @@ def get_efe_frame(env, pose, action_marginals):
     mask[mask_start_x:mask_end_x, mask_start_y:mask_end_y] = action_marginals[start_x:end_x, start_y:end_y]
     cmap = plt.cm.get_cmap('binary')  # Example: using the 'viridis' colormap
 
-    norm = colors.Normalize(vmin=0, vmax=15)
+    norm = colors.Normalize(vmin=0, vmax=18)
     ax.imshow(mask, alpha=1,  cmap=cmap, norm=norm, zorder=1)
     ax.text(pose[1], pose[0], str('x'), ha='center', va='center', color='black', fontsize=30, alpha=0.8)
     
@@ -372,7 +379,7 @@ def plot_path_in_map(env, pose, policy=None):
     verts = path.interpolated(steps=3).vertices
     x, y = verts[:, 0], verts[:, 1]
     z = np.linspace(0, 1, len(x))
-    colorline(x, y, z, cmap=plt.get_cmap('cividis'), linewidth=2, ax=ax)
+    colorline(x, y, z, cmap=plt.get_cmap('cividis'), linewidth=2, ax=ax, zorder=3)
     # plot_name = 'figures/'+ model_name + '/room_'+str(env.rooms.shape[0])+'x'+str(env.rooms.shape[1])+'_'+str(np.max(env.rooms))+'obs_0'
     # count = 0
     # while os.path.exists(plot_name+'.jpg'):
