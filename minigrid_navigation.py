@@ -4,6 +4,7 @@ import traceback
 import copy
 import gc
 
+
 def minigrid_exploration(env, model, model_name, pose, max_steps, stop_condition = None, given_policy=None):
     """ 
     
@@ -56,10 +57,10 @@ def minigrid_exploration(env, model, model_name, pose, max_steps, stop_condition
                     else:
                         action, agent_info = cscg_action_decision(model, observation,motions , random_policy)
 
-                   
             else:
                 action = given_policy[t]
                 agent_info = update_model_given_action(model, action, pose)
+                ours_infer_position(model, observation, action, next_possible_actions)
 
             obs, _,_,_ = env.step(action, pose)
             ob, pose = obs
@@ -278,8 +279,8 @@ def train_cscg(model, observations, actions):
     return model, progression
 
 def update_model_given_action(model:object, action:int, pose:tuple):
-    model.agent.action = np.array([action])
-    model.agent.step_time()
+    model.action = np.array([action])
+    model.step_time()
     if pose not in model.pose_mapping:
         model.pose_mapping.append(pose)
     return {'qs': model.get_belief_over_states()[0], "bayesian_surprise":0}

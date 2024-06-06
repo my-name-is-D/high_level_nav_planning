@@ -287,7 +287,7 @@ def setup_grid(room_choice:str = 'grid_3x3'):
     custom_colors = (
         np.array(
             [
-                [255, 255, 255],#white
+                #[255, 255, 255],#white
                 [255, 0, 0],#red
                 [0, 255, 0], #green
                 [50,50, 255], #bluish 

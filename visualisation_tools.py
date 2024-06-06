@@ -76,6 +76,28 @@ def make_segments(x, y):
 
 
 #==== SAVING PLOTS ====#
+from pathlib import Path
+def plot_state_graph(model:object, poses:list, cmap):
+    ''' save the state graph plot at each step'''
+    agent_state_mapping = model.get_agent_state_mapping()
+    Transition_matrix = model.get_B()
+    v = [value['state'] for value in agent_state_mapping.values()]
+    # obs = [value['ob'] for value in agent_state_mapping.values()]
+    T = Transition_matrix[v,:][:,v,:]
+    A = T.sum(2).round(1)
+    div = A.sum(1, keepdims=True)
+    A /= (div + 0.0001)
+    e_th = 0.1
+    
+    store_path = Path.cwd() / 'plot_graph'/str(len(poses))
+    store_path.mkdir(exist_ok=True, parents=True)
+    print('store_path', store_path)
+    while e_th < 0.3:
+        edge_threshold = e_th
+        e_th*=1.1
+        A[A < edge_threshold] = 0
+        plot_graph_as_cscg(A, agent_state_mapping, cmap, store_path, edge_threshold= edge_threshold)
+
 
 def save_transitions_plots(model, model_name, actions, desired_state_mapping, run_logs, cmap,store_path):
     if 'pose' in model_name:
@@ -86,7 +108,7 @@ def save_transitions_plots(model, model_name, actions, desired_state_mapping, ru
     agent_state_mapping = model.get_agent_state_mapping(observations,run_logs['actions'][1:], run_logs['poses'])
     Transition_matrix = model.get_B()
     T_plot = plot_transition_detailed_resized(Transition_matrix, actions, agent_state_mapping, desired_state_mapping, plot=False)
-    plt.savefig(store_path / 'model_transitions.jpg')
+    plt.savefig(store_path / 'model_transitions.png')
     plt.close()
 
     if 'pose' in model_name:
@@ -156,7 +178,7 @@ def generate_csv_report(run_logs, flags, store_path):
 
 def generate_plot_report(run_logs, env, store_path):
     ax = plot_path_in_map(env, run_logs['poses'])
-    plt.savefig(store_path /"agent_path.jpg")
+    plt.savefig(store_path /"agent_path.png")
     plt.clf()
 
     # Trajectory gif
@@ -172,7 +194,7 @@ def generate_plot_report(run_logs, env, store_path):
 
     gif_path = store_path / "navigate.gif"
     imageio.mimsave(gif_path, [imageio.imread(f"{store_path}/imgs/{i}image.jpg") for i in range(len(run_logs['frames']))], 'GIF', duration=0.5, loop=1)
-    os.system(f'rm -rf {imgs_path}')
+    # os.system(f'rm -rf {imgs_path}')
     # with imageio.get_writer(gif_path, mode='I', duration=500) as writer:
     #     # Append each frame to the GIF writer
     #     for frame in run_logs["frames"]:
@@ -190,7 +212,7 @@ def generate_plot_report(run_logs, env, store_path):
     plt.xlabel("Time")
     plt.ylabel("Entropy")
     plt.grid(True)
-    plt.savefig(store_path /"entropy_plot.jpg")
+    plt.savefig(store_path /"entropy_plot.png")
     plt.clf()
 
     # Bayesian Surprise
@@ -200,12 +222,12 @@ def generate_plot_report(run_logs, env, store_path):
     plt.xlabel("Time")
     plt.ylabel("Surprise")
     plt.grid(True)
-    plt.savefig(store_path /"Bayesian_surprise_plot.jpg")
+    plt.savefig(store_path /"Bayesian_surprise_plot.png")
     plt.clf()
 
     if 'train_progression' in run_logs:
         ax = plot_progression_T(run_logs['train_progression'])
-        plt.savefig(store_path /"train_progression.jpg")
+        plt.savefig(store_path /"train_progression.png")
 
     # Close the Matplotlib plot to release memory (optional)
     plt.close()
@@ -268,7 +290,7 @@ def plot_map(rooms, cmap, show = True):
             for j in range(rooms.shape[1]):
                 ax.text(j, i, str(rooms[i, j]), ha='center', va='center', color='black', fontsize=30)    
         try:
-            plt.savefig('figures/room_'+str(rooms.shape[0])+'x'+str(rooms.shape[1])+'_'+str(np.max(rooms))+'obs.jpg')
+            plt.savefig('figures/room_'+str(rooms.shape[0])+'x'+str(rooms.shape[1])+'_'+str(np.max(rooms))+'obs.png')
         except FileNotFoundError:
             print('the path to figures is inexistant to save the plot_map')
     return ax
@@ -329,11 +351,11 @@ def plot_path_in_map(env, pose, policy=None):
     colorline(x, y, z, cmap=plt.get_cmap('cividis'), linewidth=2, ax=ax)
     # plot_name = 'figures/'+ model_name + '/room_'+str(env.rooms.shape[0])+'x'+str(env.rooms.shape[1])+'_'+str(np.max(env.rooms))+'obs_0'
     # count = 0
-    # while os.path.exists(plot_name+'.jpg'):
+    # while os.path.exists(plot_name+'.png'):
     #     count+=1
     #     plot_name = plot_name.replace('obs_'+str(count-1), 'obs_'+str(count))
     #try:
-    #     plt.savefig(plot_name +'.jpg')
+    #     plt.savefig(plot_name +'.png')
     # except FileNotFoundError:
     #     print('the path to figures is inexistant to save the plot_path_in_map')
     return ax
@@ -397,6 +419,7 @@ def plot_graph_as_cscg(A, agent_state_mapping, cmap,store_path, edge_threshold= 
     #     count+=1
     #     plot_name = plot_name.replace('graph_'+str(count-1), 'graph_'+str(count))
     file = 'connection_graph_edge_Th_'+str(edge_threshold)+'.png'
+    
     out = igraph.plot(
         g,
         store_path / file,
@@ -572,10 +595,10 @@ def plot_transition_detailed(B, actions, state_map, desired_state_mapping, model
     if save:
         plot_name = 'figures/'+ model_name +'/'+ model_name + '_Transition_full_matrix_0'
         count = 0
-        while os.path.exists(plot_name+'.jpg'):
+        while os.path.exists(plot_name+'.png'):
             count+=1
             plot_name = plot_name.replace('matrix_'+str(count-1), 'matrix_'+str(count))
-        plt.savefig(plot_name +'.jpg')
+        plt.savefig(plot_name +'.png')
 
 
 
@@ -621,10 +644,10 @@ def plot_transition_detailed_resized(B, actions, state_map, desired_state_mappin
     # if save:
     #     plot_name = 'figures/'+ model_name + '/'+ model_name +'_Transition_matrix_0'
     #     count = 0
-    #     while os.path.exists(plot_name+'.jpg'):
+    #     while os.path.exists(plot_name+'.png'):
     #         count+=1
     #         plot_name = plot_name.replace('matrix_'+str(count-1), 'matrix_'+str(count))
-    #     plt.savefig(plot_name +'.jpg')
+    #     plt.savefig(plot_name +'.png')
     return plt
 
 def print_transitions(B, actions, show=True):
