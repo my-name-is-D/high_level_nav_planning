@@ -71,7 +71,7 @@ def find_directory(directory_name):
         if directory_name in dirs:
             return os.path.join(root, directory_name)
         
-def load_object(load_path):
+def load_object(load_path:Path):
     if not os.path.exists(load_path):
         #If the path does not exist, let's try that?
         load_path = find_directory(load_path)
@@ -84,7 +84,7 @@ def load_object(load_path):
         agent = pickle.load(inp)
     return agent
 
-def load_a_policy(policy_path):
+def load_a_policy(policy_path:Path):
     import ast
     if not os.path.exists(policy_path):
         #If the path does not exist, let's try that?
@@ -98,12 +98,12 @@ def load_a_policy(policy_path):
     start_pose = excel_data['poses'].tolist()[0]
     return policy, start_pose
 
-def dump_object(model, model_name, save_name):
+def dump_object(model:object, model_name:str, save_name:str):
     with open(str(save_name) + '/'+ model_name +'.pkl', "wb") as outp:
         pickle.dump(model, outp, pickle.HIGHEST_PROTOCOL)
 
 
-def create_store_path(model_name, env_name):
+def create_store_path(model_name:str, env_name:str)-> Path:
     cwd = Path.cwd()
     if 'cscg' in model_name :
         name = 'cscg'
@@ -237,8 +237,8 @@ def main(flags):
             
             txt_file = str(store_path) + '/'+ str(flags.model) +"_SP:"+ str(flags.start_pose) +"_G:"+ str(flags.goal) +".txt"
             print('Saving terminal prints in txt file:', txt_file)
-            txt_terminal_prints = open(txt_file, 'a+')
-            sys.stdout = txt_terminal_prints
+            # txt_terminal_prints = open(txt_file, 'a+')
+            # sys.stdout = txt_terminal_prints
             
             #SET NAVIGATION TYPE AND RUN NAVIGATION 
             if flags.goal >= 0:
