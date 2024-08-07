@@ -322,8 +322,8 @@ def setup_grid(room_choice:str = 'grid_3x3'):
         / 256
     )
 
-    n_colors = len(np.unique(rooms))
-    cmap = create_custom_cmap(custom_colors[:n_colors])
+    n_colors = len(np.unique(rooms))+1
+    cmap = create_custom_cmap(custom_colors[1:n_colors])
     return rooms, cmap
 
 def create_custom_cmap(custom_colors):
