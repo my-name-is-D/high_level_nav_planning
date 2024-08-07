@@ -1,35 +1,77 @@
 # higher_level_nav
 
 
+This work presents a navigation model at the highest level of abstraction with the agent reasoning over motions from room to room. 
+Observations are considered filtered from RGB to a single colour integer by a sub-process.
+The image below gives an example of the whole pipeline where, from left to right, you can see what a minigrid environment is expected to looks like, what the highest level actually receives as input (single colour info, corresponding to the floor colour) and what the model generates as a topological map once it has finished exploring
 
-## Getting started
+For testing purposes, the colour indexes have been set, but the model could generates the integers internally as it sees new observations. 
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+![example](git_img/from_env_to_agent_2.jpg)
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+
+## Setup
+
+From the higher_level_nav repository: 
+```
+docker built high_nav .
+./launch_docker.sh 
+```
 
 ## Tests
 
-python navigation_testbench.py --env grid_3x3 --model ours_v4_2 --max_steps 200 -p 0 -p 0 --load_model ${pkl_file} --goal ${GOAL} --stop_condition ${stop_condition} 
+Exploration:
+```
+python3 navigation_testbench.py --inf_algo 'VANILLA' --env grid_donut --model ours_v4_2 --max_steps 2 -p 0 -p 0
+```
 
+Goal oriented (can also work without loading models):
+```
+python3 navigation_testbench.py --load_model results/grid_donut/ours_exploration/ours_v4_2_MMP/ours_v4_2_MMP_2024-02-27-09-32-43/ours_v4_2_MMP.pkl --inf_algo 'MMP' --env grid_donut --model ours_v4_2_MMP --max_steps 15 -p 0 -p 0 --goal 12 --stop_condition goal_reached
+```
 
---env options: 'grid_3x3' "grid_3x3_alias" "grid_4x4" "grid_4x4_alias" 'grid_donut' 'grid_t_maze' 'grid_t_maze_alias'
-#there was 2nd Tolman maze as well but it seems I lost the config, can be redone in env/minigrid.py based on the paper appendix though
+All results are saved in the /results folder.
 
---model options: ours_v4_2 ours_v4 ours_v3 cscg cscg_pose_ob 'cscg_pose_ob_random_policy'
-#the diverse options for our models are explained below
+We are based upon pymdp, with some small modifications to allow dynamic growth of the model and have the MMP/ Vanilla work for any prediction length and any number of steps.
 
---max_steps: max number of steps for the navigation 
--p -p : starting tile pose in (x,y)
---load_model: should we use a prior map?
---goal : goal colour (as a number)
---stop_condition: under which condition to stop, exploration stops when connection looks like GT
+**parameters:**
+
+`--inf_algo`: You can choose the inference algorithm between MMP and VANILLA. 
+
+`--env`: Select an environment among the selection below (you can create more envs in envs/minigrid.py)
+
+`--model`: Which model to use between `cscg`, `ours_v1`, `ours_v3`, `ours_v4`, `ours_v4_2` (among ours, only the latest version is assured to work well.), `cscg` can be run with or without `random_policy` -> `cscg_random_policy`.
+
+`--max_steps`: How many steps the agent is allowed to take before the program stops (failsafe)
+
+`-p -p`: starting position as -p x -p y
+
+`--load_model`: path to a specific model to charge as a .pkl
+
+`--goal`: observation we want to reach, the number correspond to a colour (see environments)
+
+`--stop_condition`: failsafe to stop the model when it reaches a particular condition. Honestly, it is not really used. 
 
 
 ## Versionning
+All versions can only go toward cardinal directions or stay in the current locations.
 
 Ours_v3: VANILLA type navigation with state inferred on latest action, observation A and B
 
 Ours_v4: either VANILLA or MMP type navigation (switchable whenever during run -tried from MMP to VANILLA, not the contrary-), state inferring improved.
 
 Ours_v4_2: added linear increase of policies, policies of different lengths and the lookahead is a distance instead of the number of consecutive actions. Basically useless policies like 4x STAY or move stay move or left right have been removed, transforming an exponential increase of policies wth lookahead to a linear (or polinomial with STAY) problem. 
+
+## environements
+
+See below all environments that could be chosen:
+
+![envs](git_img/all_env_observations.png)
+
+
+Note: The last env might not be in this version of the code. However it can easily be re-created in envs/minigrid.py
+
+
+## Cite
+
+For further information about this work, refers to

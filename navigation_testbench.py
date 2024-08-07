@@ -147,10 +147,19 @@ def set_models(possible_actions:dict, rooms:np.ndarray, \
             model = Ours_V3_3(num_obs=2, \
                 num_states=2, observations=observation, \
                     learning_rate_pB=3.0, actions= possible_actions) #dim is still 2 set as default
-    elif 'ours_v4_2' in model_name: #LOOKAHEAD : 8
+    elif 'ours_v4_2' in model_name: #LOOKAHEAD : 5
             model = Ours_V4_2(num_obs=2, \
                 num_states=2, observations=observation, \
-                    learning_rate_pB=3.0, actions= possible_actions, lookahead=5, inference_algo = flags.inf_algo)
+                    learning_rate_pB=3.0, actions= possible_actions, lookahead=6, inference_algo = flags.inf_algo)
+
+        
+            #TODO: REMOVE AFTER TESTS
+            model.test_display_policy_imagination = True #TEMPORARY FOR TEST PURPOSES
+            model.sampling_mode=  'marginal'
+            # model.action_selection = 'deterministic'
+            model.lookahead_distance = False
+           
+    
     elif 'ours_v4' in model_name:
             model = Ours_V4(num_obs=2, \
                 num_states=2, observations=observation, \
@@ -226,7 +235,7 @@ def main(flags):
                 model_name = flags.model
                 if 'ours_v4' in model_name:
                     model_name+= '_'+ flags.inf_algo
-
+                   
             print('model_name', model_name)
             
                             
@@ -251,6 +260,10 @@ def main(flags):
                     preferred_ob = [flags.goal, -1] # [c_ob, pose or state]
                     model.goal_oriented_navigation(preferred_ob, inf_algo=flags.inf_algo)
                     if 'ours' in model_name and flags.load_model != 'None':
+                        model.lookahead_distance = False
+                        model.policy_len = 5
+                        model.simple_paths = False
+                        model.init_policies()
                         model.reset()
                     
                     data = minigrid_reach_goal(env, model, possible_actions, model_name, pose, \

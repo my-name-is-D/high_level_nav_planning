@@ -398,7 +398,6 @@ def calc_pA_info_gain(pA, qo_pi, qs_pi):
 
     return pA_infogain
 
-
 def calc_pB_info_gain(pB, qs_pi, qs_prev, policy):
     """
     Compute expected Dirichlet information gain about parameters ``pB`` under a given policy
@@ -562,7 +561,7 @@ def sample_action(q_pi, policies, num_controls, action_selection="deterministic"
             log_marginal_f = spm_log_single(action_marginals[factor_i])
             p_actions = softmax(log_marginal_f * alpha)
             selected_policy[factor_i] = utils.sample(p_actions)
-
+    #print('action_marginals', action_marginals, 'selected policy', selected_policy[factor_i] )
     return selected_policy
 
 def _sample_action_test(q_pi, policies, num_controls, action_selection="deterministic", alpha = 16.0, seed=None):
@@ -706,10 +705,12 @@ def _sample_policy_test(q_pi, policies, num_controls, action_selection="determin
         policy_idx = utils.sample(p_policies)
 
     selected_policy = np.zeros(num_factors)
-    for factor_i in range(num_factors):
-        selected_policy[factor_i] = policies[policy_idx][0, factor_i]
+    # for factor_i in range(num_factors):
+    #     print('policies[policy_idx]',policies[policy_idx])
+    #     selected_policy[factor_i] = policies[policy_idx][:, factor_i]
 
-    return selected_policy, p_policies
+    return policies[policy_idx], p_policies[policy_idx]
+    #return selected_policy, p_policies
 
 
 def select_highest(options_array):
