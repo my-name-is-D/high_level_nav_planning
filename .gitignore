@@ -7,7 +7,7 @@ __pycache__/*
 
 results/*
 figures
-*.png
+#*.png
 *.pdf
 steps_to_goal_grids.xlsx
 
