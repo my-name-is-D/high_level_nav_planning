@@ -639,7 +639,7 @@ def build_xn_vn_array(xn):
     
     return xn_array
 
-def plot_beliefs(belief_dist, title=""):
+def plot_beliefs(belief_dist, title="", save=False):
     """
     Utility function that plots a bar chart of a categorical probability distribution,
     with each bar height corresponding to the probability of one of the elements of the categorical
@@ -650,7 +650,11 @@ def plot_beliefs(belief_dist, title=""):
     plt.bar(range(belief_dist.shape[0]), belief_dist, color='r', zorder=3)
     plt.xticks(range(belief_dist.shape[0]))
     plt.title(title)
-    plt.show()
+    if save:
+        plt.savefig(title +'.jpg')
+        plt.close()
+    else:
+        plt.show()
     
 def plot_likelihood(A, title=""):
     """

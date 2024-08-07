@@ -1,2 +1,13 @@
-python == 3.9.7
-numpy == 1.22.1 #numba and some operations
+numpy==1.22.1 #numba and some operations
+numba==0.57.1 #for cscg tests
+igraph>=0.11.3
+imageio>=2.6.0
+seaborn>=0.9.0
+pandas>=2.0.2
+matplotlib>=3.4.3
+argparse>=1.1
+tqdm>=4.65.0
+scipy
+gc-python-utils #garbage collector
+openpyxl
+cairocffi>=1.7

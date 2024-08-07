@@ -281,6 +281,18 @@ def setup_grid(room_choice:str = 'grid_3x3'):
                     [7, 8, 9, 10, 0],
                 ]
             )
+    elif  room_choice == "grid_cross_tunnels": # differents circled paths
+
+        rooms = np.array(
+                [
+                    [-1, -1, 0, -1,-1,-1],
+                    [-1, -1, 2,  3, 1, 4],
+                    [-1, -1, 2, -1,-1, 4],
+                    [ 4,  1, 5, -1,-1,13],
+                    [ 6, -1,10,-1,-1,12],
+                    [ 7,  8, 9,  10,5,11],
+                ]
+            )
     else:
         raise ValueError("Room_choice "+ str(room_choice) +" is an invalid choice")
     
@@ -310,8 +322,8 @@ def setup_grid(room_choice:str = 'grid_3x3'):
         / 256
     )
 
-    n_colors = len(np.unique(rooms))
-    cmap = create_custom_cmap(custom_colors[:n_colors])
+    n_colors = len(np.unique(rooms))+1
+    cmap = create_custom_cmap(custom_colors[1:n_colors])
     return rooms, cmap
 
 def create_custom_cmap(custom_colors):

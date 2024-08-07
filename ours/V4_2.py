@@ -22,7 +22,8 @@ class Ours_V4_2(Agent):
         self.set_stationary_B = set_stationary_B
         self.step_possible_actions = list(self.possible_actions.values())
         self.lookahead_distance = False #lookahead in number of consecutive steps
-
+        self.simple_paths = True #L shaped paths, less computationally extensive
+        
         observations, agent_params = self.create_agent_params(num_obs=num_obs, num_states=num_states, observations=observations, \
                             learning_rate_pB=learning_rate_pB, dim=dim, lookahead=lookahead, inference_algo = inference_algo)
         super().__init__(**agent_params)
@@ -76,12 +77,12 @@ class Ours_V4_2(Agent):
         linear_policies(bool): 
         if False: we try all combinaison of actions (exponential n_action^policy_len  -wth policy_len==lookahead-) )
         if True: We create linear path reaching at a lookahead DISTANCE (not number of consecutive actions) or NUM STEPS
-        we make it linear 8*policy_len+4 if no 'STAY' actions, else it's polynomial with 8*policy_len^2+12*policy_len+5 In the case of 5 actions.
+        we make it linear if no 'STAY' actions, else it's polynomial.
         It's not linear because of the STAY action that is irregular and set only at the end of a policy.
 
         NOTE:linear_policies=True is only tailored for num_factor==1 and len(num_control)==1 
         """
-        
+      
         if linear_policies:
             self.init_policies(E)
         self.reset(start_pose=self.pose_mapping[0])
@@ -112,10 +113,10 @@ class Ours_V4_2(Agent):
         if sorted_qs[-1]-sorted_qs[-2] >= threshold and len(observations) < 2 and len(self.A) > 1:
             p_idx = np.argmax(self.A[1][:,np.argmax(qs[0])])
             self.current_pose = self.pose_mapping[p_idx]
-            print('updating believed pose given certitude on state:', self.current_pose)
+            #print('updating believed pose given certitude on state:', self.current_pose)
     
     def init_policies(self, E=None):
-        policies = create_policies(self.policy_len, self.possible_actions, lookahead_distance=self.lookahead_distance)
+        policies = create_policies(self.policy_len, self.possible_actions, lookahead_distance=self.lookahead_distance,simple_paths= self.simple_paths)
         self.policies = policies
         assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
         
@@ -132,6 +133,7 @@ class Ours_V4_2(Agent):
             assert len(self.E) == len(self.policies), f"Check E vector: length of E must be equal to number of policies: {len(self.policies)}"
         else:
             self.E = self._construct_E_prior()
+    
     #==== GET METHODS ====#
     def get_agent_state_mapping(self, x=None,a=None, agent_pose=None)->dict:
         return self.agent_state_mapping
@@ -294,7 +296,8 @@ class Ours_V4_2(Agent):
 
         #In case we don't have observations.
         posterior = self.get_belief_over_states()
-        print('infer action: inferred prior state', posterior[0].round(3))
+        #utils.plot_beliefs(posterior[0], 'belief over states step '+str(self.curr_timestep), save=True)
+        #print('infer action: inferred prior state', posterior[0].round(3))
         q_pi, efe = self.infer_policies(posterior)
         
         action = self.sample_action(next_possible_actions)
@@ -423,7 +426,7 @@ class Ours_V4_2(Agent):
         ''' 
         For each new pose observation, add a ghost state and update the estimated transition and observation for that ghost state.
         '''
-        print('Ghost nodes process:')
+        # print('Ghost nodes process:')
         pose = self.pose_mapping[p_idx]
 
         for action in self.possible_actions.values():
@@ -713,27 +716,62 @@ class Ours_V4_2(Agent):
             qs = self.qs
 
         if self.inference_algo == "VANILLA":
-            
-            q_pi, G = update_posterior_policies(
-                qs,
-                self.A,
-                self.B,
-                self.C,
-                self.policies,
-                self.use_utility,
-                self.use_states_info_gain,
-                self.use_param_info_gain,
-                self.pA,
-                self.pB,
-                E = self.E,
-                gamma = self.gamma,
-                diff_policy_len = self.lookahead_distance
-            )
+            if self.test_display_policy_imagination:
+                q_pi, G, self.G_per_actions = update_posterior_policies_test(
+                    qs,
+                    self.A,
+                    self.B,
+                    self.C,
+                    self.policies,
+                    self.use_utility,
+                    self.use_states_info_gain,
+                    self.use_param_info_gain,
+                    self.pA,
+                    self.pB,
+                    E = self.E,
+                    gamma = self.gamma,
+                    diff_policy_len = self.lookahead_distance
+                )
+            else:
+                q_pi, G = update_posterior_policies(
+                    qs,
+                    self.A,
+                    self.B,
+                    self.C,
+                    self.policies,
+                    self.use_utility,
+                    self.use_states_info_gain,
+                    self.use_param_info_gain,
+                    self.pA,
+                    self.pB,
+                    E = self.E,
+                    gamma = self.gamma,
+                    diff_policy_len = self.lookahead_distance
+                )
+
         elif self.inference_algo == "MMP":
             # if qs is None:
             #     future_qs_seq = self.get_future_qs()
-
-            q_pi, G = update_posterior_policies_full(
+            if self.test_display_policy_imagination:
+                q_pi, G, self.G_per_actions = update_posterior_policies_full_test(
+                    qs, #future_qs_seq
+                    self.A,
+                    self.B,
+                    self.C,
+                    self.policies,
+                    self.use_utility,
+                    self.use_states_info_gain,
+                    self.use_param_info_gain,
+                    self.latest_belief,
+                    self.pA,
+                    self.pB,
+                    F = self.F,
+                    E = self.E,
+                    gamma = self.gamma,
+                    diff_policy_len = self.lookahead_distance
+                )
+            else:
+                q_pi, G = update_posterior_policies_full(
                 qs, #future_qs_seq
                 self.A,
                 self.B,
@@ -782,13 +820,19 @@ class Ours_V4_2(Agent):
             policies =  self.policies
             q_pi = self.q_pi
 
+        if self.test_display_policy_imagination:
+            self.poses_efe = sample_action_test(self.G_per_actions, q_pi,policies, self.possible_actions)
+        
         if self.sampling_mode == "marginal":
             action = control.sample_action(
                 q_pi, policies, self.num_controls, action_selection = self.action_selection, alpha = self.alpha
             )
         elif self.sampling_mode == "full":
             action = control.sample_policy(q_pi, policies, self.num_controls,
-                                           action_selection=self.action_selection, alpha=self.alpha)
+                                        action_selection=self.action_selection, alpha=self.alpha)
+
+      
+    
 
         self.action = action
 
@@ -802,7 +846,7 @@ class Ours_V4_2(Agent):
         #We only update A and B if we have inferred a current pose
         #Thus until doubt over current loc is not solved, we don't update internal self
         if self.current_pose != None:
-            print('Updating model given observations', observations)
+            #print('Updating model given observations', observations)
             ob = observations[0]
             if len(observations) > 1:
                 self.current_pose = observations[1]
@@ -819,7 +863,7 @@ class Ours_V4_2(Agent):
             # new_state_size = agent.num_states[0]
             #4. UPDATE BELIEVES GIVEN OBS
             _, Qs = self.infer_states([ob,p_idx], distr_obs=False, save_hist=False)
-            print('prior on believed state; action', action, 'colour_ob:', ob, 'inf pose:',pose,'belief:', Qs[0].round(3))
+            #print('prior on believed state; action', action, 'colour_ob:', ob, 'inf pose:',pose,'belief:', Qs[0].round(3))
             
             #4.5 UPDATE A AND B WITH THOSE BELIEVES
             self.update_believes_v2(Qs, action, [ob,p_idx])
@@ -829,13 +873,14 @@ class Ours_V4_2(Agent):
             #ADD KNOWLEDGE WALL T OR GHOST NODES
             #inv_action = reverse_action(self.possible_actions, action) #just to gain some computation time
             self.add_ghost_node_v3(qs,p_idx, possible_next_actions)
-
+            
             #This is not mandatory, just a gain of time
             if 'STAY' in self.possible_actions:
                 self.B[0] = set_stationary(self.B[0], self.possible_actions['STAY'])
             self.update_C_dim()
-
-
+        # qs = self.get_belief_over_states()
+        # print('qs',qs)
+        # utils.plot_beliefs(qs[0], 'belief over states step '+str(self.curr_timestep), save=True)
 
 
 
