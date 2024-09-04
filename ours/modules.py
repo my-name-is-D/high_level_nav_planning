@@ -289,8 +289,6 @@ def update_state_likelihood_dirichlet(
 
     return qB
 
-
-
 def update_posterior_policies(
     qs,
     A,
@@ -646,7 +644,6 @@ def update_posterior_policies_full(
     
     return q_pi, G
 
-
 def update_posterior_policies_full_test(
     qs_seq_pi,
     A,
@@ -738,6 +735,7 @@ def update_posterior_policies_full_test(
     q_pi = maths.softmax(G * gamma - F + lnE)
     
     return q_pi, G, G_per_actions
+
 def sample_action_test(G_per_actions, q_pi, policies, actions):
     
     """
@@ -912,7 +910,10 @@ def create_policies(lookahead:int, actions:dict, current_pose:list=(0,0), lookah
     Note simple_paths= False is not compatible with lookahead_distance=True (will be set back to false), to avoid long computation time.
     
     '''
-    if simple_paths:
+    if lookahead == 13:
+        print('here okay')
+        policies_lists = define_static_policies(lookahead,actions)
+    elif simple_paths:
         goal_poses = define_policies_objectives(current_pose, lookahead)
         policies_lists = []
         #get all the actions leading to the endpoints
@@ -1100,9 +1101,101 @@ def from_int_to_str(policy):
         str_policy.append(a)
     return str_policy
 
+def define_static_policies(lookahead, actions_dict):
+    """ generating 78 policies looping around for a specific test"""
+    path1_policy = [[2]]*lookahead
+    paths = []
+    for step in range(len(path1_policy)):
+        if 'STAY' in actions_dict:
+            # Add a 'STAY' action after each step and append it to action_seq_options
+            action_seq_with_stay = path1_policy[:step].copy()
+            action_seq_with_stay.append([actions_dict['STAY']])
+            if len(action_seq_with_stay) < lookahead :
+                    action_seq_with_stay.extend([[actions_dict['STAY']]] * (lookahead- len(action_seq_with_stay)))
+        paths.append(action_seq_with_stay)
+    
+    path_p_wt_left = path1_policy.copy()
+    for i in range(3):
+        path_p_wt_left.insert(0,[actions_dict['LEFT']])
+        paths.append(path_p_wt_left.copy())
+    
+    path_p_wt_right = path1_policy.copy()
+    for i in range(2):
+        path_p_wt_right.insert(0,[actions_dict['RIGHT']])
+        paths.append(path_p_wt_right.copy()[:lookahead])
 
+    path2_policy = [[0],[0], [2],[2], [1],[1], [2],[2],[2]]
+    path_p_wt_down = path2_policy.copy()
+    for i in range(2):
+        path_p_wt_down.insert(0,[actions_dict['DOWN']])
+        paths.append(path_p_wt_down.copy()[:lookahead])
 
+    looping_back = [[3],[0],[0],[0]]
+    for step in range(len(looping_back)):
+        path = looping_back[step:] + path2_policy
+        # print(path[:13])
+        paths.append(path[:lookahead])
+        
+    for step in range(len(path2_policy)-3):
+        paths.append(path2_policy[step:])
 
+    path3_policy = [[1],[1],[1], [2],[2],[2],[2], [0],[0],[0],[2]]
+
+    looping_back = [[0],[0],[3],[3],[1],[1]]
+
+    for step in range(len(looping_back)):
+        path = looping_back[step:] + path3_policy
+        # print(path[:13])
+        paths.append(path[:lookahead])
+    
+    path_p_wt_down = path3_policy.copy()
+    for i in range(2):
+        path_p_wt_down.insert(0,[actions_dict['DOWN']])
+        paths.append(path_p_wt_down.copy())
+
+    for step in range(len(path3_policy)-1):
+        paths.append(path3_policy[step:])
+
+    new_paths = []
+    for path in paths:
+        new_path = []
+        insert_id = -1
+        save = []
+        # print('path', path)
+        for step in path[::-1]:
+            # print('step', step, 'inserted', insert_id)
+            if step[0] == 2:
+                # new_path.insert(insert_id,[3])
+                new_path.append([3])
+                # print('inserted 3')
+            elif step[0] == 3:
+                # new_path.insert(insert_id,[2])
+                new_path.append([2])
+                # print('inserted 2')
+            elif step[0] == 0:
+                # new_path.insert(insert_id,[1])
+                new_path.append([1])
+                # print('inserted 1')
+            elif step[0] == 1:
+                # new_path.insert(insert_id,[0])
+                new_path.append([0])
+                # print('inserted 0')
+            else:
+                save = [4]
+                #new_path.insert(insert_id,step)
+                # insert_id-=1
+        if len(save) >0:
+            new_path.append(save)
+        # print('new path', new_path)
+        new_paths.append(new_path)
+    paths.extend(new_paths)
+
+    for i,path in enumerate(paths):
+        if len(path) < lookahead and 'STAY' in actions_dict:
+                path.extend([[actions_dict['STAY']]] *(lookahead- len(path)))
+        paths[i] = np.array(path).reshape(len(path), 1)
+    
+    return paths
 
 
 def calc_expected_utility_test(qo_pi, C):

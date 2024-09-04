@@ -51,7 +51,7 @@ parser.add_argument('--max_steps',
 
 parser.add_argument('--stop_condition',
     type=str,
-    help="explo_done or goal_recahed can be used to stop experiment before max_step reached",
+    help="explo_done or goal_reached can be used to stop experiment before max_step reached",
     default = 'None')
 
 parser.add_argument('--load_policy',
@@ -64,6 +64,16 @@ parser.add_argument('--inf_algo',
     help="Inference algo Vanilla or MMP",
     default = 'VANILLA')
 
+parser.add_argument('--run',
+    type=int,
+    help="which run are we at in our experiment",
+    default = -1)
+
+parser.add_argument('--agent_id',
+    type=int,
+    help="which agent are we using",
+    default = 1)
+
 
 def find_directory(directory_name):
     start_dir = Path.cwd() / 'results'
@@ -72,14 +82,18 @@ def find_directory(directory_name):
             return os.path.join(root, directory_name)
         
 def load_object(load_path):
-    if not os.path.exists(load_path):
+
+    if os.path.isdir(load_path):
+        for file in os.listdir(load_path):
+            if file.endswith(".pkl"):
+                    load_path = os.path.join(load_path, file) 
+    elif not os.path.exists(load_path):
         #If the path does not exist, let's try that?
         load_path = find_directory(load_path)
         if load_path[-4:] != '.pkl':
             for file in os.listdir(load_path):
                 if file.endswith(".pkl"):
                     load_path = os.path.join(load_path, file) 
-            
     with open(load_path, "rb") as inp:
         agent = pickle.load(inp)
     return agent
@@ -128,6 +142,26 @@ def create_store_path(model_name, env_name):
 
     store_path.mkdir(exist_ok=True, parents=True)
     return store_path.resolve()
+
+def create_tolman_store_path(agent_id, env_name, run):
+    cwd = Path.cwd()
+    
+    nav_type = 'Tolman_maze'
+    model_type = 'ours_v4_2'
+    agent_name = 'agent_' + str(agent_id)
+    dp = cwd / 'results'/ env_name / nav_type / model_type / agent_name
+    # elif 'ours' in model_name and 'goal' in model_name:
+    #     dp = cwd / 'results'/ env_name / 'ours_goal' 
+    # else:
+    #     dp = cwd / 'results'/ env_name / model_name
+   
+    save_name = 'run_'+ str(run)
+    
+    store_path = dp / save_name
+
+    store_path.mkdir(exist_ok=True, parents=True)
+    return store_path.resolve()
+
 
 def set_models(possible_actions:dict, rooms:np.ndarray, \
                obs_c_p:list, start_state:int, flags):
@@ -186,7 +220,7 @@ def set_models(possible_actions:dict, rooms:np.ndarray, \
 
 def main(flags):
         
-    available_models = ['cscg_random_policy', 'cscg', 'ours_v3', 'ours_v5', 'ours_v4']
+    available_models = ['cscg_random_policy', 'cscg', 'ours_v3', 'ours_v5', 'ours_v4', 'ours_v4_2']
     data = {}
     try:
         #SETUP ENVIRONMENT
@@ -215,6 +249,12 @@ def main(flags):
             
             state = env.get_state(pose)
             
+            #Tolman get previous memory
+            if flags.run >=0:
+                store_path = create_tolman_store_path(flags.agent_id, env_name, flags.run)
+                if flags.run > 0:
+                    flags.load_model = str(store_path)[:-len(str(flags.run))] + str(flags.run-1)
+                
             #SET MODEL
             if flags.load_model != 'None' :
                 print('Loading model from: ', flags.load_model)
@@ -226,7 +266,7 @@ def main(flags):
                     model.agent.reset()
                 else:
                     model.reset()
-                                
+
                 #model_name = [substring for substring in available_models if substring == flags.load_model][0]
             else:
                 print('Creating model: ', flags.model)
@@ -242,7 +282,9 @@ def main(flags):
             #SAVING TERMINAL LOGS
             if flags.goal >= 0:
                 model_name+='_goal_ob:'+str(flags.goal)
-            store_path = create_store_path(model_name, env_name)
+            if flags.run < 0:
+                store_path = create_store_path(model_name, env_name)
+                
             
             txt_file = str(store_path) + '/'+ str(flags.model) +"_SP:"+ str(flags.start_pose) +"_G:"+ str(flags.goal) +".txt"
             print('Saving terminal prints in txt file:', txt_file)
@@ -258,16 +300,22 @@ def main(flags):
                 if output != None:
 
                     preferred_ob = [flags.goal, -1] # [c_ob, pose or state]
-                    model.goal_oriented_navigation(preferred_ob, inf_algo=flags.inf_algo)
+                    pref_weight = 2
+                    print('pref_weight:',pref_weight)
+                    model.goal_oriented_navigation(preferred_ob, inf_algo=flags.inf_algo, pref_weight=pref_weight)
                     if 'ours' in model_name and flags.load_model != 'None':
                         model.lookahead_distance = False
-                        model.policy_len = 5
+                        model.policy_len = 13
                         model.simple_paths = False
                         model.init_policies()
                         model.reset()
                     
                     data = minigrid_reach_goal(env, model, possible_actions, model_name, pose, \
                                             flags.max_steps, stop_condition = flags.stop_condition.lower())
+                
+                
+                    if flags.run >= 0:
+                        dump_object(model, model_name, store_path)
                 else:
                     data = {
                         "steps": 0,

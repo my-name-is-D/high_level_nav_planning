@@ -116,6 +116,7 @@ class Ours_V4_2(Agent):
             #print('updating believed pose given certitude on state:', self.current_pose)
     
     def init_policies(self, E=None):
+        print(self.policy_len)
         policies = create_policies(self.policy_len, self.possible_actions, lookahead_distance=self.lookahead_distance,simple_paths= self.simple_paths)
         self.policies = policies
         assert all([len(self.num_controls) == policy.shape[1] for policy in self.policies]), "Number of control states is not consistent with policy dimensionalities"
@@ -183,17 +184,17 @@ class Ours_V4_2(Agent):
         self.use_utility = False
 
     def goal_oriented_navigation(self, obs=None, **kwargs):
-        inf_algo = kwargs.get('inf_algo', 'MMP')
+        inf_algo = kwargs.get('inf_algo', 'VANILLA')
+        self.pref_weight = kwargs.get('pref_weight', 1)
         self.switch_inference_algo(inf_algo)
-        self.update_preference(obs)
+        self.update_preference(obs,self.pref_weight)
         self.use_param_info_gain = False
-        self.use_states_info_gain = False #This make it FULLY Goal oriented
+        self.use_states_info_gain = True #This make it FULLY Goal oriented
         #NOTE: if we want it to prefere this C but still explore a bit once certain about state 
         #(keep exploration/exploitation balanced) keep info gain
         self.use_utility = True
-        self.inference_horizon = 4 
 
-    def update_preference(self, obs:list):
+    def update_preference(self, obs:list, pref_weight:float=1):
         """given a list of observations we fill C with thos as preference. 
         If we have a partial preference over several observations, 
         then the given observation should be an integer < 0, the preference will be a null array 
@@ -210,7 +211,7 @@ class Ours_V4_2(Agent):
                     ob = utils.to_obj_array(ob_processed)
                 else:
                     ob = utils.obj_array_zeros([self.num_obs[modality]])
-                C[modality] = np.array(ob[0])
+                C[modality] = pref_weight * np.array(ob[0]) #NOTE: FLAG
 
             if not isinstance(C, np.ndarray):
                 raise TypeError(
