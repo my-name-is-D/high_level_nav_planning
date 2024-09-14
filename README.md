@@ -1,3 +1,16 @@
+THIS BRANCH IS A SANDBOX, I DO NOT GUARANTEE THAT ANYTHING IS WORKING. 
+Originally used to gather results for the Tolman experiments in a separate branch, I tried a lot of "what if" to see the results on the agent comportment. 
+Here:
+
+- The preference has a modulable weight (set to 2 in the navigation_testbench.py)
+- The reach goal behaviour has exploration and exploitation activated
+- The lookahead is of 14 steps
+- I set a pre-determined policy generation for these 14 steps' prediction range (to see if that had an impact, it does, since fewer policies and more adapted to the environment)
+- and a few other unsuccessful tests such as testing the impact of forbidding to go back in path, having a modulable E depending on the previous motion...
+
+There are quite a few experimental failures here that I just left as it is since it is not the main branch. 
+
+
 # higher_level_nav
 
 
