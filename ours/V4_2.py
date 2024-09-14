@@ -432,6 +432,14 @@ class Ours_V4_2(Agent):
         for action in self.possible_actions.values():
             if action not in possible_next_actions: #this mean this action is not deemed possible
                 self.update_B(qs, qs, action, lr_pB = 10)
+                #ADDING NEGATIVE LR To existing transition with that action
+                n_pose = next_p_given_a(pose, self.possible_actions, action)
+                if n_pose in self.pose_mapping:
+                    p_idx = self.pose_mapping.index(n_pose)
+                    _, hypo_qs = self.infer_states([p_idx], np.array([action]), partial_ob=1, save_hist=False)
+                    self.update_B(hypo_qs, qs, action, lr_pB = -7) 
+                    a_inv = reverse_action(self.possible_actions, action)
+                    self.update_B(qs, hypo_qs, a_inv, lr_pB = -5)
             else:
                 n_pose = next_p_given_a(pose, self.possible_actions, action)
                 if n_pose not in self.pose_mapping:
