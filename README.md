@@ -14,7 +14,7 @@ For testing purposes, the colour indexes have been set, but the model could gene
 
 From the higher_level_nav repository: 
 ```
-docker built high_nav .
+docker built -t high_nav .
 ./launch_docker.sh 
 ```
 
@@ -32,7 +32,7 @@ python3 navigation_testbench.py --load_model results/grid_donut/ours_exploration
 
 All results are saved in the /results folder.
 
-We are based upon pymdp, with some small modifications to allow dynamic growth of the model and have the MMP/ Vanilla work for any prediction length and any number of steps.
+We are based upon pymdp, with some small modifications to allow dynamic growth of the model and have the MMP/ Vanilla work for any prediction length and any number of steps. The pymdp model can be found in the agent folder, all significantly modified methods are explicitely identified.  
 
 **parameters:**
 
@@ -61,17 +61,17 @@ Ours_v3: VANILLA type navigation with state inferred on latest action, observati
 Ours_v4: either VANILLA or MMP type navigation (switchable whenever during run -tried from MMP to VANILLA, not the contrary-), state inferring improved.
 
 Ours_v4_2: added linear increase of policies, policies of different lengths and the lookahead is a distance instead of the number of consecutive actions. Basically useless policies like 4x STAY or move stay move or left right have been removed, transforming an exponential increase of policies wth lookahead to a linear (or polinomial with STAY) problem. 
+A lot of variables to play around with, most un-used after verifying they are not good options. If you find variables that are not defined in the Readme, they are probably not interesting to play with and are not improving the model. 
 
 ## environements
 
 See below all environments that could be chosen:
 
-![envs](git_img/all_env_observations.png)
+![envs](git_img/envs.png)
 
-
-Note: The last env might not be in this version of the code. However it can easily be re-created in envs/minigrid.py
+You can create new envs in envs/minigrid.py, they have to start with "grid" to be recognised as minigrid envs by the automatic benchmark. 
 
 
 ## Cite
 
-For further information about this work, refers to
+For further information about this work, refers to:
