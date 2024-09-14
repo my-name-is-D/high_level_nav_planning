@@ -258,7 +258,7 @@ def main(flags):
                 if output != None:
 
                     preferred_ob = [flags.goal, -1] # [c_ob, pose or state]
-                    model.goal_oriented_navigation(preferred_ob, inf_algo=flags.inf_algo)
+                    model.goal_oriented_navigation(preferred_ob, inf_algo=flags.inf_algo, pref_weight=1)
                     if 'ours' in model_name and flags.load_model != 'None':
                         model.lookahead_distance = False
                         model.policy_len = 5

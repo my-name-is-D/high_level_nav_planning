@@ -1,6 +1,3 @@
-# higher_level_nav
-
-
 This work presents a navigation model at the highest level of abstraction with the agent reasoning over motions from room to room. 
 Observations are considered filtered from RGB to a single colour integer by a sub-process.
 The image below gives an example of the whole pipeline where, from left to right, you can see what a minigrid environment is expected to look like, what the highest level receives as input (single colour info, corresponding to the floor colour) and what the model generates as a topological map once it has finished exploring
@@ -35,8 +32,7 @@ All results are saved in the /results folder.
 We are based upon pymdp, with some small modifications to allow dynamic growth of the model and have the MMP/ Vanilla work for any prediction length and any number of steps. The pymdp model can be found in the agent folder, all significantly modified methods are explicitly identified.  
 
 
-NOTE: the goal comportment here is set as purely exploitative, you can modify this by setting to True `self.use_states_info_gain` in `agent.py` -> `goal_oriented_navigation()` 
-I do not recommend setting to True the use_param_info_gain, didn't observe improvements in exploration. 
+
 
 **parameters:**
 
@@ -54,7 +50,13 @@ I do not recommend setting to True the use_param_info_gain, didn't observe impro
 
 `--goal`: observation we want to reach, the number corresponds to a colour (see environments)
 
-`--stop_condition`: failsafe to stop the model when it reaches a particular condition. Honestly, it is not really used. 
+`--stop_condition`: failsafe to stop the model when it reaches a particular condition. Mainly used to stop the program once we find the goal, else the agent continues up to the end of its max steps. 
+
+Additionnally, you can play with the lenght of the policies `model.policy_len` and the preference weight `pref_weight` in `navigation_benchmark.py` .
+
+The goal comportment here is set as purely exploitative, you can modify this by setting to True `self.use_states_info_gain` in `agent.py` -> `goal_oriented_navigation()` 
+I do not recommend setting to True the use_param_info_gain, didn't observe improvements in exploration. 
+I also do not recommand to set to true `lookahead_distance` as the results were not concluding.
 
 
 ## Versionning
