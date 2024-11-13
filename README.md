@@ -1,4 +1,6 @@
 This work presents a navigation model at the highest level of abstraction with the agent reasoning over motions from room to room. 
+It is a solution decision making and planning in a biologically inspired way without pre-training. 
+
 Observations are considered filtered from RGB to a single colour integer by a sub-process.
 The image below gives an example of the whole pipeline where, from left to right, you can see what a minigrid environment is expected to look like, what the highest level receives as input (single colour info, corresponding to the floor colour) and what the model generates as a topological map once it has finished exploring
 
@@ -6,7 +8,10 @@ For testing purposes, the colour indexes have been set, but the model could gene
 
 ![example](git_img/from_env_to_agent_2.jpg)
 
+See below the agent choosing rooms in a full minigrid environement. 
+As reference, this gif was obtained in two levels. The agent decides on where to go given doors detection and floor colour, the second is navigating toward the desired direction. This second layer is not presented in this repository. 
 
+![gif](git_img/representation_state_growth.gif)
 ## Setup
 
 From the higher_level_nav repository: 
