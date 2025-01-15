@@ -86,3 +86,15 @@ You can create new envs in envs/minigrid.py, they have to start with "grid" to b
 ## Cite
 
 For further information about this work, refer to:
+
+@article{de_Tinguy_2024,
+   title={Learning dynamic cognitive map with autonomous navigation},
+   volume={18},
+   ISSN={1662-5188},
+   url={http://dx.doi.org/10.3389/fncom.2024.1498160},
+   DOI={10.3389/fncom.2024.1498160},
+   journal={Frontiers in Computational Neuroscience},
+   publisher={Frontiers Media SA},
+   author={de Tinguy, Daria and Verbelen, Tim and Dhoedt, Bart},
+   year={2024},
+   month=dec }
